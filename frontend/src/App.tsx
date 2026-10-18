@@ -8,6 +8,7 @@ import { ConfigurePage } from './pages/ConfigurePage';
 import { ResultsPage } from './pages/ResultsPage';
 import { SettingsModal } from './components/SettingsModal';
 import { TutorialModal } from './components/TutorialModal';
+import { ExampleDatasetsModal } from './components/ExampleDatasetsModal';
 import type { Step } from './lib/types';
 
 const STEPS: Array<{ id: Step; label: string }> = [
@@ -21,6 +22,7 @@ function AppShell() {
   const [showLogs, setShowLogs] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showExampleDatasets, setShowExampleDatasets] = useState(false);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-pharma-50">
@@ -41,6 +43,7 @@ function AppShell() {
           onToggleLogs={() => setShowLogs((s) => !s)}
           showLogs={showLogs}
           onOpenTutorial={() => setShowTutorial(true)}
+          onOpenExampleDatasets={() => setShowExampleDatasets(true)}
         />
 
         <main
@@ -76,6 +79,12 @@ function AppShell() {
       <TutorialModal
         open={showTutorial}
         onClose={() => setShowTutorial(false)}
+        onOpenExampleDatasets={() => setShowExampleDatasets(true)}
+      />
+      <ExampleDatasetsModal
+        open={showExampleDatasets}
+        onClose={() => setShowExampleDatasets(false)}
+        onOpenTutorial={() => setShowTutorial(true)}
       />
     </div>
   );

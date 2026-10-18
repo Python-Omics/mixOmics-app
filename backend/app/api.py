@@ -30,7 +30,7 @@ async def health():
     """
     Endpoint para verificar que todo funciona bien
     """
-    return {"status": "Todo bien gente, toy sano!"}
+    return {"status": "Todo bien gente, toy sano! la vida es bella"}
 
 
 @app.get("/v1/archivos/", status_code=status.HTTP_200_OK)

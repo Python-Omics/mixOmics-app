@@ -4,6 +4,7 @@ import { CloseIcon, ExternalLinkIcon } from './icons';
 type Props = {
   open: boolean;
   onClose: () => void;
+  onOpenExampleDatasets?: () => void;
 };
 
 /**
@@ -13,7 +14,7 @@ type Props = {
  * Accesibilidad: role="dialog", aria-modal, cierre con Escape, foco
  * inicial en el botón de cerrar.
  */
-export function TutorialModal({ open, onClose }: Props) {
+export function TutorialModal({ open, onClose, onOpenExampleDatasets }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -113,10 +114,37 @@ export function TutorialModal({ open, onClose }: Props) {
               <li>
                 <strong>Visualiza los resultados.</strong> Obten gráficos y
                 una tabla de biomarcadores seleccionados. Exporta figuras y
-                reportes para tus publicaciones.
+                reportes para tus investigaciones.
               </li>
             </ol>
           </section>
+
+          {/* ¿Por dónde empezar? */}
+          {onOpenExampleDatasets && (
+            <section>
+              <h3 className="text-sm font-semibold text-pharma-700 mb-1.5">
+                ¿Por dónde empezar?
+              </h3>
+              <p className="mb-3">
+                Puedes probar con uno de los
+                datasets de ejemplo pre-empaquetados de{' '}
+                <code className="font-mono text-pharma-700">mixOmics</code>.
+                No se necesita internet ni ninguna configuración adicional.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenExampleDatasets();
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-pharma-50 text-pharma-700 border border-pharma-200 hover:bg-pharma-100 hover:border-pharma-400 transition-colors text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pharma-500"
+                aria-label="Abrir datasets de ejemplo"
+              >
+                <span>Probar datasets de ejemplo</span>
+                <span aria-hidden="true">→</span>
+              </button>
+            </section>
+          )}
 
           {/* Más información */}
           <section>

@@ -161,6 +161,12 @@ venv.bak/
 .venv/
 backend/.venv/
 
+# Docs internos (no se commitean; viven solo en working tree)
+DECISIONS.md
+
+# Outputs de scripts/ (los CSVs generados se commitean, los artefactos no)
+scripts/__pycache__/
+
 
 # Spyder project settings
 .spyderproject

@@ -16,3 +16,14 @@ createRoot(container).render(
     <App />
   </StrictMode>,
 );
+
+// Ocultar el splash screen después del primer paint de React.
+// requestAnimationFrame garantiza que la UI ya se pintó al menos una vez.
+requestAnimationFrame(() => {
+  const splash = document.getElementById('splash');
+  if (splash) {
+    splash.classList.add('hidden');
+    // Remover del DOM después de la transición para liberar el listener
+    setTimeout(() => splash.remove(), 300);
+  }
+});

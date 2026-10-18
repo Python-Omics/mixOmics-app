@@ -16,7 +16,7 @@ test.describe('Pythomics frontend — POC', () => {
   });
 
   test('carga la app con los 3 pasos en el sidebar', async ({ page }) => {
-    await expect(page.getByText('Pythomics', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pythomics');
     await expect(
       page.getByRole('button', { name: 'Cargar datos' }),
     ).toBeVisible();
@@ -132,5 +132,120 @@ test.describe('Pythomics frontend — POC', () => {
     await expect(
       page.getByRole('dialog', { name: 'Tutorial' }),
     ).not.toBeVisible();
+  });
+
+  test('abre el modal de datasets de ejemplo desde el TopBar', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Probar con dataset de ejemplo' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Probar con dataset de ejemplo' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('nutrimouse')).toBeVisible();
+    await expect(dialog.getByText('srbct')).toBeVisible();
+    await expect(dialog.getByText('breast.TCGA')).toBeVisible();
+  });
+
+  test('cargar srbct desde el modal lo agrega al FileList y cierra el modal', async ({
+    page,
+  }) => {
+    await page.route('**/datasets/srbct_gene.csv', async (route) => {
+      const fakeCsv = 'sample_1,sample_2\n1.2,3.4\n5.6,7.8\n';
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: fakeCsv,
+      });
+    });
+
+    await page.getByRole('button', { name: 'Probar con dataset de ejemplo' }).click();
+    await page.getByRole('button', { name: 'Cargar dataset srbct' }).click();
+
+    // El modal se cierra
+    await expect(
+      page.getByRole('dialog', { name: 'Probar con dataset de ejemplo' }),
+    ).not.toBeVisible();
+    // El archivo aparece en el FileList
+    await expect(
+      page.getByRole('listitem').filter({ hasText: 'srbct_gene.csv' }),
+    ).toBeVisible();
+    // El botón Siguiente se habilita
+    await expect(page.getByRole('button', { name: /Siguiente/ })).toBeEnabled();
+  });
+
+  test('el modal de datasets de ejemplo se cierra con Escape', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Probar con dataset de ejemplo' }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Probar con dataset de ejemplo' }),
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(
+      page.getByRole('dialog', { name: 'Probar con dataset de ejemplo' }),
+    ).not.toBeVisible();
+  });
+
+  test('el Tutorial tiene la sección ¿Por dónde empezar? con botón', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Abrir tutorial' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Tutorial' });
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByRole('heading', { name: '¿Por dónde empezar?' }),
+    ).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: 'Abrir datasets de ejemplo' }),
+    ).toBeVisible();
+  });
+
+  test('el botón ¿Por dónde empezar? abre el modal de datasets', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Abrir tutorial' }).click();
+    await page.getByRole('button', { name: 'Abrir datasets de ejemplo' }).click();
+    // El modal de Tutorial se cierra
+    await expect(page.getByRole('dialog', { name: 'Tutorial' })).not.toBeVisible();
+    // Se abre el modal de datasets
+    await expect(
+      page.getByRole('dialog', { name: 'Probar con dataset de ejemplo' }),
+    ).toBeVisible();
+  });
+
+  test('cargar nutrimouse trae los 2 bloques (gene + lipid) en paralelo', async ({
+    page,
+  }) => {
+    // Mockeamos los 2 fetches en paralelo
+    await page.route('**/datasets/nutrimouse_gene.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'g1,g2,g3\n1.0,2.0,3.0\n4.0,5.0,6.0\n',
+      });
+    });
+    await page.route('**/datasets/nutrimouse_lipid.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'l1,l2\n0.1,0.2\n0.3,0.4\n',
+      });
+    });
+
+    await page
+      .getByRole('button', { name: 'Probar con dataset de ejemplo' })
+      .click();
+    await page
+      .getByRole('button', { name: 'Cargar dataset nutrimouse' })
+      .click();
+
+    // Ambos archivos están en el FileList
+    await expect(
+      page.getByRole('listitem').filter({ hasText: 'nutrimouse_gene.csv' }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('listitem').filter({ hasText: 'nutrimouse_lipid.csv' }),
+    ).toBeVisible();
+    // El contador de archivos dice "2 archivos cargados"
+    await expect(page.getByText('2 archivos cargados')).toBeVisible();
   });
 });

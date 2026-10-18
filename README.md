@@ -2,7 +2,7 @@
 
 Pythomics es un port a Python de la librería `mixOmics` (R/Bioconductor) para integración multi-ómica, junto con una aplicación de escritorio en Electron que permite a biólogos sin experiencia en programación ejecutar pipelines completos (carga → preprocesamiento → PCA / sPLS-DA / DIABLO → gráficos → reporte PDF) en local, sin subir matrices crudas a la nube. El cálculo estadístico se ejecuta 100% en el equipo del usuario. En versiones futuras, con consentimiento explícito, se podrán consultar APIs biológicas públicas (UniProt, MyGene) y servicios de LLM para anotar biomarcadores y asistir el análisis preliminar, enviando solo identificadores genéricos y métricas agregadas. La librería se publica con tolerancia numérica 1e-6 frente a R y licencia GPL-3.0-or-later.
 
-## Estructura del repo
+## Estructura de carpetas
 
 ```
 mixomics-python/
@@ -46,18 +46,21 @@ a otra ubicación, es necesario actualizar el path.
 
 ## Ejecución
 
-Cada proceso se corre **en su propia terminal**.
+**Caso normal: una sola terminal.** El frontend levanta Vite + Electron, y Electron levanta el backend Python en background.
 
 ```bash
-# Terminal 1: backend (FastAPI en http://127.0.0.1:8501)
+cd mixOmics-app/frontend
+npm run dev
+# → Vite arranca en :5173
+# → Electron espera a Vite, spawnea `python main.py` desde backend/
+# → Polling a http://127.0.0.1:8501/v1/health (timeout 30s)
+# → Ventana abre, badge pasa a "Backend en línea" cuando está listo
+```
+
+**Opcional: backend aislado** (por si se quiere hacer debug/tests aislados):
+
+```bash
 cd mixOmics-app/backend
 .venv/bin/python main.py
 # → Swagger en http://127.0.0.1:8501/docs
-
-# Terminal 2: frontend (Vite + Electron, con backend autoarrancado)
-cd mixOmics-app/frontend
-npm run dev
-# → ventana de Electron debería abrir en  < 3s
 ```
-
-El frontend abre la UI inmediatamente y arranca el backend en background.

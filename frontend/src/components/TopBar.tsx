@@ -1,12 +1,12 @@
 import type { Step } from '../lib/types';
-import { BackendStatusBadge } from './BackendStatusBadge';
-import { ChevronUpIcon, ChevronDownIcon, QuestionIcon } from './icons';
+import { ChevronUpIcon, ChevronDownIcon, QuestionIcon, ChartIcon } from './icons';
 
 type Props = {
   currentStep: Step;
   onToggleLogs: () => void;
   showLogs: boolean;
   onOpenTutorial: () => void;
+  onOpenExampleDatasets: () => void;
 };
 
 const STEP_TITLES: Record<Step, string> = {
@@ -20,6 +20,7 @@ export function TopBar({
   onToggleLogs,
   showLogs,
   onOpenTutorial,
+  onOpenExampleDatasets,
 }: Props) {
   return (
     <header className="h-14 bg-white border-b border-pharma-200 flex items-center justify-between px-6 shrink-0">
@@ -30,7 +31,15 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-3">
-        <BackendStatusBadge />
+        <button
+          type="button"
+          onClick={onOpenExampleDatasets}
+          className="btn-secondary"
+          aria-label="Probar con dataset de ejemplo"
+        >
+          <ChartIcon className="w-4 h-4" />
+          <span>Probar datasets</span>
+        </button>
         <button
           type="button"
           onClick={onOpenTutorial}

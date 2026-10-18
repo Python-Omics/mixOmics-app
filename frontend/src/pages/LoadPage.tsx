@@ -23,7 +23,7 @@ export function LoadPage({ onNext }: Props) {
     try {
       const res = await window.pyxAPI.api.post('/v1/cargar/', {
         filename: file.filename,
-        size: file.size,
+        content: file.content ?? '',
       });
 
       if (res.ok) {

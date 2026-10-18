@@ -60,6 +60,7 @@ export function FileDropzone({ onFileAdded }: Props) {
             size: file.size,
             uploadedAt: Date.now(),
             preview,
+            content: text,
           });
         }
       } finally {

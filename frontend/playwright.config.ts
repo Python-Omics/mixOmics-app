@@ -51,12 +51,14 @@ export default defineConfig({
     },
   },
 
-  // Arranca Vite antes de correr los tests
+  // Arranca Vite antes de correr los tests. reuseExistingServer=false
+  // garantiza que siempre se levante uno fresco (evita falsos negativos
+  // cuando un server previo se quedó colgado).
   webServer: {
     command: 'npm run dev:vite',
     url: 'http://127.0.0.1:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000,
+    reuseExistingServer: false,
+    timeout: 60_000,
   },
 
   projects: [
