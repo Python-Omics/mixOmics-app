@@ -61,17 +61,27 @@ export function LoadPage({ onNext }: Props) {
 
   return (
     <div className="max-w-3xl space-y-5">
-      <header>
-        <h2 className="text-lg font-semibold text-pharma-700">
-          Cargar datos ómicos
-        </h2>
-        <p className="text-sm text-slate-600 mt-1">
-          Sube uno o más archivos{' '}
-          <code className="font-mono text-pharma-700">.csv</code> o{' '}
-          <code className="font-mono text-pharma-700">.tsv</code> con tus
-          matrices (expresión, proteómica, metabolómica o variables clínicas).
-          Filas = muestras, columnas = variables.
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-pharma-700">
+            Cargar datos ómicos
+          </h2>
+          <p className="text-sm text-slate-600 mt-1">
+            Sube uno o más archivos{' '}
+            <code className="font-mono text-pharma-700">.csv</code> o{' '}
+            <code className="font-mono text-pharma-700">.tsv</code> con tus
+            matrices (expresión, proteómica, metabolómica o variables clínicas).
+            Filas = muestras, columnas = variables.
+          </p>
+        </div>
+        <span
+          className="shrink-0 whitespace-nowrap text-xs font-medium text-slate-500 bg-pharma-100 border border-pharma-200 rounded-full px-3 py-1 mt-0.5"
+          role="status"
+          aria-live="polite"
+        >
+          {state.files.length} archivo{state.files.length === 1 ? '' : 's'}{' '}
+          cargados
+        </span>
       </header>
 
       <FileDropzone onFileAdded={handleFileAdded} />
@@ -93,11 +103,7 @@ export function LoadPage({ onNext }: Props) {
 
       <FileList files={state.files} onRemove={handleRemove} />
 
-      <footer className="flex justify-between items-center pt-2">
-        <span className="text-xs text-slate-500">
-          {state.files.length} archivo{state.files.length === 1 ? '' : 's'}{' '}
-          cargados
-        </span>
+      <footer className="flex justify-end pt-2">
         <button
           type="button"
           className="btn-primary"

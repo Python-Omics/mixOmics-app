@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { ProjectProvider } from './lib/project-state';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
-import { LogPanel } from './components/LogPanel';
 import { LoadPage } from './pages/LoadPage';
 import { ConfigurePage } from './pages/ConfigurePage';
 import { ResultsPage } from './pages/ResultsPage';
@@ -19,7 +18,6 @@ const STEPS: Array<{ id: Step; label: string }> = [
 
 function AppShell() {
   const [step, setStep] = useState<Step>('load');
-  const [showLogs, setShowLogs] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showExampleDatasets, setShowExampleDatasets] = useState(false);
@@ -40,8 +38,6 @@ function AppShell() {
       <div className="flex flex-col flex-1 overflow-hidden">
         <TopBar
           currentStep={step}
-          onToggleLogs={() => setShowLogs((s) => !s)}
-          showLogs={showLogs}
           onOpenTutorial={() => setShowTutorial(true)}
           onOpenExampleDatasets={() => setShowExampleDatasets(true)}
         />
@@ -68,8 +64,6 @@ function AppShell() {
             />
           )}
         </main>
-
-        {showLogs && <LogPanel onClose={() => setShowLogs(false)} />}
       </div>
 
       <SettingsModal

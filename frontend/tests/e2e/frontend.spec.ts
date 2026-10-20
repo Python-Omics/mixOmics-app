@@ -30,12 +30,79 @@ test.describe('Pythomics frontend — POC', () => {
 
   test('abre el modal de Configuración desde el sidebar', async ({ page }) => {
     await page.getByRole('button', { name: 'Abrir configuración' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Configuración' });
+    await expect(dialog).toBeVisible();
+    // El sidebar de secciones está presente con "Personalización" activa
     await expect(
-      page.getByRole('dialog', { name: 'Configuración' }),
+      dialog.getByRole('navigation', { name: 'Secciones de configuración' }),
     ).toBeVisible();
     await expect(
-      page.getByText('Cargar tu API key de un proveedor de IA (BYOK)'),
-    ).toBeVisible();
+      dialog.getByRole('button', { name: 'Personalización' }),
+    ).toHaveAttribute('aria-current', 'page');
+  });
+
+  test('el selector de temas muestra los 3 temas disponibles', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Abrir configuración' }).click();
+    const group = page.getByRole('radiogroup', { name: 'Tema de colores' });
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('radio')).toHaveCount(3);
+    await expect(group).toContainText('Pharmacy Fresh');
+    await expect(group).toContainText('Sterile Aqua');
+    await expect(group).toContainText('Minted Hygiene');
+  });
+
+  test('cambiar el tema actualiza data-theme y persiste en localStorage', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Abrir configuración' }).click();
+    const group = page.getByRole('radiogroup', { name: 'Tema de colores' });
+
+    // El default es Pharmacy Fresh
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'pharmacy-fresh');
+
+    // Cambiar a Sterile Aqua
+    await group.getByRole('radio').filter({ hasText: 'Sterile Aqua' }).click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'sterile-aqua');
+
+    // Persistido en localStorage
+    const stored = await page.evaluate(() => localStorage.getItem('pythomics.theme'));
+    expect(stored).toBe('sterile-aqua');
+
+    // Y sobrevive a un reload (anti-FOUC lo aplica antes del paint)
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'sterile-aqua');
+  });
+
+  test('el tema cambia efectivamente el CSS del body', async ({ page }) => {
+    const bgDefault = await page.evaluate(() =>
+      getComputedStyle(document.body).backgroundColor,
+    );
+    await page.getByRole('button', { name: 'Abrir configuración' }).click();
+    await page
+      .getByRole('radiogroup', { name: 'Tema de colores' })
+      .getByRole('radio')
+      .filter({ hasText: 'Sterile Aqua' })
+      .click();
+    await page.keyboard.press('Escape');
+
+    const bgSterile = await page.evaluate(() =>
+      getComputedStyle(document.body).backgroundColor,
+    );
+    // #f9fffb vs #eaf7fb — deben diferir
+    expect(bgSterile).not.toBe(bgDefault);
+  });
+
+  test('Telehealth Night aparece como Próximamente, no seleccionable', async ({
+    page,
+  }) => {
+    await page.getByRole('button', { name: 'Abrir configuración' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Configuración' });
+    await expect(dialog).toContainText('Telehealth Night');
+    await expect(dialog).toContainText('Próximamente');
+    // No es un radio seleccionable
+    await expect(dialog.getByRole('radio')).toHaveCount(3);
   });
 
   test('cierra el modal con el botón Cerrar', async ({ page }) => {
@@ -60,21 +127,7 @@ test.describe('Pythomics frontend — POC', () => {
     ).not.toBeVisible();
   });
 
-  test('abre y cierra el panel de logs', async ({ page }) => {
-    await page
-      .getByRole('button', { name: 'Mostrar logs del backend' })
-      .click();
-    await expect(
-      page.getByRole('region', { name: 'Logs del backend' }),
-    ).toBeVisible();
-
-    await page
-      .getByRole('button', { name: 'Ocultar logs del backend' })
-      .click();
-    await expect(
-      page.getByRole('region', { name: 'Logs del backend' }),
-    ).not.toBeVisible();
-  });
+  
 
   test('el botón Siguiente está deshabilitado sin archivos', async ({
     page,

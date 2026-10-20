@@ -36,7 +36,7 @@ export function DataPreview({ filename, preview }: Props) {
                   </td>
                 ))}
                 {row.length > 6 && (
-                  <td className="px-2 py-1 text-pharma-400 italic">
+                  <td className="px-2 py-1 text-slate-500 italic">
                     +{row.length - 6} más
                   </td>
                 )}

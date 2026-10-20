@@ -48,6 +48,15 @@ export function ChartIcon(props: IconProps) {
   );
 }
 
+/** Check — para paso completado. */
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props}>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
 /** Cruz (X) — para cerrar/eliminar. */
 export function CloseIcon(props: IconProps) {
   return (
@@ -58,38 +67,24 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
-/** Check — para paso completado. */
-export function CheckIcon(props: IconProps) {
-  return (
-    <svg {...baseProps} {...props}>
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
-
-/** Triángulo apuntando arriba/abajo — para el toggle del panel de logs. */
-export function ChevronUpIcon(props: IconProps) {
-  return (
-    <svg {...baseProps} {...props}>
-      <polyline points="18 15 12 9 6 15" />
-    </svg>
-  );
-}
-
-export function ChevronDownIcon(props: IconProps) {
-  return (
-    <svg {...baseProps} {...props}>
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  );
-}
-
 /** Tuerca (settings) — para abrir configuración. */
 export function SettingsIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props}>
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+/** Paleta (pincel con puntos de color) — para la sección de Personalización. */
+export function PaletteIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props}>
+      <path d="M12 2a10 10 0 0 0 0 20c1.4 0 2-1 2-1.8 0-.8-.6-1.4-.6-2.2 0-.8.7-1.2 1.5-1.2H16a6 6 0 0 0 6-6c0-4.9-4.5-8.8-10-8.8z" />
+      <circle cx="7.5" cy="11.5" r="1" />
+      <circle cx="10.5" cy="7.5" r="1" />
+      <circle cx="15" cy="8.5" r="1" />
     </svg>
   );
 }

@@ -7,22 +7,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Paleta "Pharmacy Fresh" — 5 colores base dados:
-        //   #F9FFFB #DFF7E8 #9BE7B1 #2CB67D #1F3D2C
-        // Los tonos intermedios (300/500/600/800/900) son interpolaciones
-        // coherentes para poder usar la escala completa de Tailwind sin
-        // introducir colores fuera de la paleta.
+        // Paleta de marca — los valores vienen de CSS custom properties
+        // (ver src/styles/globals.css). Cambiar de tema es cambiar el
+        // atributo `data-theme` del <html>, sin recompilar.
         pharma: {
-          50:  '#F9FFFB',  // fondo
-          100: '#DFF7E8',  // superficie
-          200: '#9BE7B1',  // border / divider
-          300: '#73DBA1',  // interpolado
-          400: '#2CB67D',  // primary
-          500: '#25A06B',  // hover del primary
-          600: '#1E8A5C',  // interpolado
-          700: '#1F3D2C',  // sidebar / texto principal
-          800: '#182E22',  // interpolado
-          900: '#112218',  // borde del sidebar
+          50:  'var(--p-50)',
+          100: 'var(--p-100)',
+          200: 'var(--p-200)',
+          300: 'var(--p-300)',
+          400: 'var(--p-400)',
+          500: 'var(--p-500)',
+          600: 'var(--p-600)',
+          700: 'var(--p-700)',
+          800: 'var(--p-800)',
+          900: 'var(--p-900)',
         },
       },
       fontFamily: {

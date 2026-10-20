@@ -6,6 +6,23 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8501 ws://127.0.0.1:5173 http://localhost:5173 ws://localhost:5173;" />
     <title>Pythomics — Análisis multi-ómico</title>
+    <script>
+      // Anti-FOUC: aplica el tema persistido ANTES del primer paint.
+      // Sin esto, el navegador pinta el tema por defecto y luego salta al
+      // guardado,，产生 un flash visible.
+      (function () {
+        try {
+          var stored = localStorage.getItem('pythomics.theme');
+          var valid = ['pharmacy-fresh', 'sterile-aqua', 'minted-hygiene'];
+          document.documentElement.setAttribute(
+            'data-theme',
+            valid.indexOf(stored) !== -1 ? stored : 'pharmacy-fresh',
+          );
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'pharmacy-fresh');
+        }
+      })();
+    </script>
     <style>
       /* Splash screen: visible hasta que React monte y lo oculte */
       #splash {
@@ -16,7 +33,7 @@
         align-items: center;
         justify-content: center;
         gap: 1rem;
-        background: #F9FFFB; /* pharma-50 */
+        background: var(--p-50, #F9FFFB); /* respeta el tema activo */
         z-index: 50;
         transition: opacity 200ms ease-out;
       }
@@ -27,19 +44,19 @@
       #splash .logo {
         font-size: 1.5rem;
         font-weight: 700;
-        color: #1F3D2C; /* pharma-700 */
+        color: var(--p-700, #1F3D2C); /* respeta el tema activo */
         letter-spacing: -0.02em;
       }
       #splash .tagline {
         font-size: 0.75rem;
-        color: #64748b; /* slate-500 */
+        color: #64748b; /* slate-500: neutro, fijo */
         margin-top: -0.5rem;
       }
       #splash .spinner {
         width: 32px;
         height: 32px;
-        border: 3px solid #9BE7B1; /* pharma-200 */
-        border-top-color: #2CB67D; /* pharma-400 */
+        border: 3px solid var(--p-200, #9BE7B1);
+        border-top-color: var(--p-400, #2CB67D);
         border-radius: 50%;
         animation: splash-spin 0.8s linear infinite;
       }

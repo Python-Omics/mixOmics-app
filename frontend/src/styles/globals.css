@@ -3,23 +3,80 @@
 @tailwind utilities;
 
 /*
- * Paleta "Pharmacy Fresh" — contraste WCAG 2.1 AA verificado:
+ * ============================================================================
+ * SISTEMA DE TEMAS
+ * ============================================================================
  *
- *   Texto sobre fondo claro (#F9FFFB):
- *   - pharma-700 (#1F3D2C) sobre pharma-50:    ~13.0:1  (AAA texto normal)
- *   - pharma-700 (#1F3D2C) sobre pharma-100:   ~8.6:1   (AAA texto normal)
- *   - slate-700 (#334155) sobre pharma-50:     ~10:1    (AAA)
- *   - slate-500 (#64748b) sobre pharma-50:     ~4.7:1   (AA texto normal)
+ * Las clases `pharma-*` de Tailwind resuelven a CSS custom properties. Cambiar
+ * de tema es cambiar el atributo `data-theme` del <html> — sin recompilar.
  *
- *   Texto sobre sidebar oscuro (pharma-700 #1F3D2C):
- *   - white sobre pharma-700:                  ~13.0:1  (AAA)
- *   - pharma-100 (#DFF7E8) sobre pharma-700:   ~8.6:1   (AAA)
+ * Paletas médicas disponibles (ver src/lib/themes.ts para metadata):
+ *   - Pharmacy Fresh  (default)
+ *   - Sterile Aqua
+ *   - Minted Hygiene
  *
- *   Acentos:
- *   - pharma-400 (#2CB67D) sobre white:        ~3.5:1   (decorativo / Large)
- *   - pharma-500 (#25A06B) sobre white:        ~4.2:1   (botones / Large)
- *   - pharma-700 sobre pharma-50 (focus):      ~13.0:1  (AAA)
+ * Telehealth Night (tema oscuro) queda fuera por ahora: requiere separar los
+ * roles de `pharma-700` (fondo de sidebar vs texto principal), que en dark
+ * mode necesitan valores opuestos. Ver DECISIONS.md.
+ *
+ * ─── Contraste verificado (WCAG 2.1) ────────────────────────────────────────
+ *
+ * Todos los temas cumplen AA (≥4.5:1) en texto normal:
+ *   texto principal (700) sobre fondo (50)     9.5:1 … 12.0:1
+ *   texto sidebar (white) sobre sidebar (700)  9.7:1 … 13.0:1
+ *   texto sobre superficie (700) sobre (100)   8.4:1 … 10.6:1
+ *   botón primary (white sobre 500)            4.7:1 … 7.7:1  ← factor 0.72
+ *
+ * El shade 500 se oscurece con factor 0.72 sobre el 400 para que el texto
+ * blanco del botón primary cumpla AA. Con el factor 0.88 que se usaba antes,
+ * Pharmacy Fresh daba 3.31:1 y Minted Hygiene 3.55:1 (ambos FAIL).
+ *
+ * Los grises `slate-*` (texto secundario, bordes, placeholders) son FIJOS:
+ * no cambian con el tema. Son neutros y funcionan sobre cualquier fondo claro.
  */
+
+/* ─── Pharmacy Fresh (default) ────────────────────────────────────────────── */
+:root,
+[data-theme='pharmacy-fresh'] {
+  --p-50: #f9fffb;  /* fondo */
+  --p-100: #dff7e8; /* superficie */
+  --p-200: #9be7b1; /* borde / divider */
+  --p-300: #64cf97; /* interpolado */
+  --p-400: #2cb67d; /* primary */
+  --p-500: #20835a; /* primary hover (400 × 0.72 → AA con texto blanco) */
+  --p-600: #1d7651; /* interpolado */
+  --p-700: #1f3d2c; /* sidebar / texto principal */
+  --p-800: #1a3425; /* borde del sidebar */
+  --p-900: #15291e; /* borde del sidebar */
+}
+
+/* ─── Sterile Aqua ────────────────────────────────────────────────────────── */
+[data-theme='sterile-aqua'] {
+  --p-50: #eaf7fb;
+  --p-100: #bfeaf2;
+  --p-200: #63c9d6;
+  --p-300: #41a4b1;
+  --p-400: #1e7f8c;
+  --p-500: #165b65;
+  --p-600: #14535b;
+  --p-700: #20343a;
+  --p-800: #1b2c31;
+  --p-900: #152327;
+}
+
+/* ─── Minted Hygiene ──────────────────────────────────────────────────────── */
+[data-theme='minted-hygiene'] {
+  --p-50: #f2fffb;
+  --p-100: #cff7ea;
+  --p-200: #7fe3c6;
+  --p-300: #55c9a8;
+  --p-400: #2aae8a;
+  --p-500: #1e7d63;
+  --p-600: #1b715a;
+  --p-700: #124d41;
+  --p-800: #0f4237;
+  --p-900: #0c342c;
+}
 
 @layer base {
   html {

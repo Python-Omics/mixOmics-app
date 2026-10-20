@@ -1,10 +1,8 @@
 import type { Step } from '../lib/types';
-import { ChevronUpIcon, ChevronDownIcon, QuestionIcon, ChartIcon } from './icons';
+import { QuestionIcon, ChartIcon } from './icons';
 
 type Props = {
   currentStep: Step;
-  onToggleLogs: () => void;
-  showLogs: boolean;
   onOpenTutorial: () => void;
   onOpenExampleDatasets: () => void;
 };
@@ -15,13 +13,7 @@ const STEP_TITLES: Record<Step, string> = {
   results: 'Paso 3 · Resultados',
 };
 
-export function TopBar({
-  currentStep,
-  onToggleLogs,
-  showLogs,
-  onOpenTutorial,
-  onOpenExampleDatasets,
-}: Props) {
+export function TopBar({ currentStep, onOpenTutorial, onOpenExampleDatasets }: Props) {
   return (
     <header className="h-14 bg-white border-b border-pharma-200 flex items-center justify-between px-6 shrink-0">
       <div className="flex items-center gap-3">
@@ -48,20 +40,6 @@ export function TopBar({
         >
           <QuestionIcon className="w-4 h-4" />
           <span>Tutorial</span>
-        </button>
-        <button
-          type="button"
-          onClick={onToggleLogs}
-          className="btn-secondary"
-          aria-label={showLogs ? 'Ocultar logs del backend' : 'Mostrar logs del backend'}
-          aria-pressed={showLogs}
-        >
-          {showLogs ? (
-            <ChevronDownIcon className="w-3 h-3" />
-          ) : (
-            <ChevronUpIcon className="w-3 h-3" />
-          )}
-          {showLogs ? 'Ocultar logs' : 'Ver logs'}
         </button>
       </div>
     </header>
