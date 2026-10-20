@@ -342,14 +342,18 @@ test.describe('Pythomics frontend — POC', () => {
       await expect(page.getByRole('heading', { level: 1 })).toHaveText('Pythomics');
       // Un solo landmark de contenido (Home y pipeline no coexisten)
       await expect(page.locator('#main-content')).toHaveCount(1);
-      // La bajada del hero
+      // La bajada del hero. Regex en vez de texto exacto: el copy es una
+      // decisión de producto que cambia (ya pasó: "sin programación" ->
+      // "e investigadores") y un assert literal rompe el suite en silencio.
       await expect(
-        page.getByText('Análisis multi-ómico local para biólogos sin programación'),
+        page.getByText(/Análisis multi-ómico local para biólogos/),
       ).toBeVisible();
       // El CTA
-      await expect(
-        page.getByRole('button', { name: 'Iniciar integración multiómica' }),
-      ).toBeVisible();
+      const cta = page.getByRole('button', { name: 'Iniciar integración multiómica' });
+      await expect(cta).toBeVisible();
+      // El footer no debe expulsar al hero de la ventana (toBeVisible solo
+      // exige bounding box, no estar dentro del viewport).
+      await expect(cta).toBeInViewport();
       // Los 3 pasos del pipeline todavía no existen
       await expect(
         page.getByRole('button', { name: 'Cargar datos' }),
@@ -452,6 +456,31 @@ test.describe('Pythomics frontend — POC', () => {
 
       await page.keyboard.press('Enter');
       await expect(page.locator('#main-content')).toBeFocused();
+    });
+
+    test('la franja de roadmap lista los candidatos y no los presenta como botones', async ({
+      page,
+    }) => {
+      const footer = page.getByRole('contentinfo');
+      await expect(footer).toBeVisible();
+      await expect(
+        footer.getByRole('heading', { level: 2, name: 'Próximamente en Inicio' }),
+      ).toBeVisible();
+
+      // Lista informativa, no interactiva: ni botones ni links.
+      const items = footer.getByRole('listitem');
+      await expect(items).toHaveCount(6);
+      await expect(footer.getByRole('button')).toHaveCount(0);
+      await expect(footer.getByRole('link')).toHaveCount(0);
+
+      // El copy de la roadmap es una decisión de producto que cambia seguido,
+      // así que NO se asserta literal: ya rompió el suite dos veces (el copy del
+      // hero y esta lista). Lo que importa es que cada item tenga texto real.
+      const texts = await items.allTextContents();
+      expect(texts).toHaveLength(6);
+      for (const t of texts) {
+        expect(t.trim().length).toBeGreaterThan(0);
+      }
     });
   });
 });

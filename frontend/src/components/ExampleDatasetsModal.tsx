@@ -210,7 +210,8 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                 onClose();
                 onOpenTutorial();
               }}
-              className="btn-ghost text-xs"
+              className="btn-primary shrink-0"
+              aria-label="Abrir el tutorial: ¿cómo usar?"
             >
               ¿Cómo usar? →
             </button>
