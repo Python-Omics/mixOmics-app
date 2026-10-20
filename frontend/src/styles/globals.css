@@ -14,6 +14,8 @@
  *   - Pharmacy Fresh  (default)
  *   - Sterile Aqua
  *   - Minted Hygiene
+ *   - Soft Bandage
+ *   - Immunity Citrus
  *
  * Telehealth Night (tema oscuro) queda fuera por ahora: requiere separar los
  * roles de `pharma-700` (fondo de sidebar vs texto principal), que en dark
@@ -22,10 +24,15 @@
  * ─── Contraste verificado (WCAG 2.1) ────────────────────────────────────────
  *
  * Todos los temas cumplen AA (≥4.5:1) en texto normal:
- *   texto principal (700) sobre fondo (50)     9.5:1 … 12.0:1
- *   texto sidebar (white) sobre sidebar (700)  9.7:1 … 13.0:1
- *   texto sobre superficie (700) sobre (100)   8.4:1 … 10.6:1
- *   botón primary (white sobre 500)            4.7:1 … 7.7:1  ← factor 0.72
+ *   texto principal (700) sobre fondo (50)     9.5:1 … 12.8:1
+ *   texto sidebar (white) sobre sidebar (700)  9.7:1 … 13.5:1
+ *   texto sobre superficie (700) sobre (100)   8.4:1 … 10.8:1
+ *   botón primary (white sobre 500)            4.7:1 … 7.7:1
+ *
+ * El shade 500 se oscurece sobre el 400 para que el texto blanco del botón
+ * primary cumpla AA. El factor depende de qué tan claro es el 400: los verdes
+ * usan 0.72, Immunity Citrus usa 0.58 (su ámbar #FFB703 es mucho más claro y a
+ * 0.72 daba 3.31:1, FAIL).
  *
  * El shade 500 se oscurece con factor 0.72 sobre el 400 para que el texto
  * blanco del botón primary cumpla AA. Con el factor 0.88 que se usaba antes,
@@ -76,6 +83,42 @@
   --p-700: #124d41;
   --p-800: #0f4237;
   --p-900: #0c342c;
+}
+
+/* ─── Soft Bandage ────────────────────────────────────────────────────────── */
+[data-theme='soft-bandage'] {
+  --p-50: #fff8f2;
+  --p-100: #f6e3d6;
+  --p-200: #d9b7a7;
+  --p-300: #ba9182;
+  --p-400: #9c6b5d;
+  --p-500: #704d43;
+  --p-600: #65463c;
+  --p-700: #3d2a25;
+  --p-800: #34241f;
+  --p-900: #291d19;
+}
+
+/* ─── Immunity Citrus ────────────────────────────────────────────────────────
+ * Paleta con salto de matiz: borde = lima (#A6E65A), primary = ámbar (#FFB703).
+ *
+ * 300 usa dk(200, 0.85) en vez de blend con 400: el blend lima/ámbar al 50%
+ * daba #d2ce2e (oliva sucio, pierde el carácter cítrico de la paleta).
+ *
+ * 500 usa factor 0.58 en vez del 0.72 de los temas verdes: el ámbar #FFB703
+ * es mucho más claro, y a 0.72 daba 3.31:1 (FAIL AA). A 0.58 da 4.86:1.
+ */
+[data-theme='immunity-citrus'] {
+  --p-50: #f7fff4;
+  --p-100: #dff7c9;
+  --p-200: #a6e65a;
+  --p-300: #8dc44c;
+  --p-400: #ffb703;
+  --p-500: #946a02;
+  --p-600: #996e02;
+  --p-700: #2b3a1f;
+  --p-800: #25311a;
+  --p-900: #1d2715;
 }
 
 @layer base {

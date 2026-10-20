@@ -8,15 +8,34 @@ type Props = {
   currentStep: Step;
   onSelect: (step: Step) => void;
   onOpenSettings: () => void;
+  onGoHome: () => void;
 };
 
-export function Sidebar({ steps, currentStep, onSelect, onOpenSettings }: Props) {
+export function Sidebar({
+  steps,
+  currentStep,
+  onSelect,
+  onOpenSettings,
+  onGoHome,
+}: Props) {
   const currentIndex = steps.findIndex((s) => s.id === currentStep);
 
   return (
     <aside className="w-64 bg-pharma-700 text-white flex flex-col shrink-0">
       <div className="p-6 border-b border-pharma-900">
-        <h1 className="text-xl font-bold tracking-tight">Pythomics</h1>
+        {/* El título es el botón de volver a Inicio. Va dentro del <h1> para
+            que la pantalla del pipeline siga teniendo su único encabezado
+            de nivel 1. */}
+        <h1 className="text-xl font-bold tracking-tight">
+          <button
+            type="button"
+            onClick={onGoHome}
+            title="Ir a Inicio"
+            className="rounded-md hover:text-pharma-100 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pharma-300"
+          >
+            Pythomics
+          </button>
+        </h1>
         <p className="text-xs text-pharma-200 mt-1">
           Análisis multi-ómico · POC v0.1.0
         </p>

@@ -22,6 +22,14 @@ var/
 wheels/
 share/python-wheels/
 *.egg-info/
+
+# El patrón Python 'lib/' de arriba matchea cualquier directorio llamado "lib",
+# en cualquier profundidad — incluyendo frontend/src/lib/, que es TypeScript.
+# Sin esta excepción, los 7 archivos de ese directorio quedan invisibles para
+# git y un clone limpio no compila. El patrón original sigue aplicando para
+# los artefactos de Python.
+!frontend/src/lib/
+!frontend/src/lib/**
 .installed.cfg
 *.egg
 MANIFEST

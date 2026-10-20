@@ -13,7 +13,13 @@
       (function () {
         try {
           var stored = localStorage.getItem('pythomics.theme');
-          var valid = ['pharmacy-fresh', 'sterile-aqua', 'minted-hygiene'];
+          var valid = [
+            'pharmacy-fresh',
+            'sterile-aqua',
+            'minted-hygiene',
+            'soft-bandage',
+            'immunity-citrus',
+          ];
           document.documentElement.setAttribute(
             'data-theme',
             valid.indexOf(stored) !== -1 ? stored : 'pharmacy-fresh',

@@ -27,7 +27,7 @@ export function TopBar({ currentStep, onOpenTutorial, onOpenExampleDatasets }: P
           type="button"
           onClick={onOpenExampleDatasets}
           className="btn-secondary"
-          aria-label="Probar con dataset de ejemplo"
+          aria-label="Probar datasets de ejemplo"
         >
           <ChartIcon className="w-4 h-4" />
           <span>Probar datasets</span>
