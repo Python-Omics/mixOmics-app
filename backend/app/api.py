@@ -64,29 +64,19 @@ async def crear_reporte():
     pass
 
 @app.post("/v1/archivos/", status_code=status.HTTP_201_CREATED)
-async def cargar_data(file: UploadFile = File(...)):
-    """
-    Endpoint para cargar datos locales, manejarlos en una carpeta interna.
-
-    TODO: Ajustar parametros, 
-    """
+async def cargar_data(request: Request, file: UploadFile = File(...)):
+    data_dir = request.app.state.DATA_DIR
     nombre_seguro = os.path.basename(file.filename)
-    ruta_archivo = os.path.join(DATA_DIR, nombre_seguro)
+    ruta_archivo = os.path.join(data_dir, nombre_seguro)
     
     try:
-        # Usamos shutil para copiar el flujo de datos (buffer) directamente al disco
-        # Esto es eficiente en memoria, ideal para datasets pesados.
         with open(ruta_archivo, "wb") as buffer_destino:
             shutil.copyfileobj(file.file, buffer_destino)
             
-        return {
-            "mensaje": f"Archivo '{nombre_seguro}' subido correctamente.",
-            "nombre_archivo": nombre_seguro
-        }
+        return {"mensaje": "Archivo subido", "nombre": nombre_seguro}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar el archivo: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Siempre debemos cerrar el archivo en memoria liberando recursos
         file.file.close()
     
 
@@ -109,20 +99,16 @@ async def ejecutar_modelo_llm():
     pass
 
 @app.delete("/v1/archivos/", status_code=status.HTTP_200_OK)
-async def delete_archivos(nombre_archivo: str):
-    """
-    Endpoint para borrar un archivo de la carpeta de datos.
-    
-    TODO: Usar os.
-    """
+async def delete_archivos(request: Request, nombre_archivo: str):
+    data_dir = request.app.state.DATA_DIR
     nombre_seguro = os.path.basename(nombre_archivo)
-    ruta_archivo = os.path.join(DATA_DIR, nombre_seguro)
+    ruta_archivo = os.path.join(data_dir, nombre_seguro)
     
     if not os.path.exists(ruta_archivo):
-        raise HTTPException(status_code=404, detail=f"El archivo '{nombre_seguro}' no existe.")
+        raise HTTPException(status_code=404, detail="El archivo no existe.")
     
     try:
         os.remove(ruta_archivo)
-        return {"mensaje": f"Archivo '{nombre_seguro}' eliminado correctamente."}
+        return {"mensaje": f"Archivo eliminado."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al eliminar el archivo: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
