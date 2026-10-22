@@ -1,10 +1,11 @@
 fastapi
 uvicorn[standard]
 pydantic
+python-multipart
 
 # Librería pythomics (port de mixOmics a Python) editable install
 # Apunta a repo ../../omics (mixomics-python/omics/)
--e ../../omics
+# -e ../../omics
 
 # y así hay que dejarlo cuando se suba a Pypi:
 # pythomics>=0.1.0
