@@ -1,6 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+import sys
+import os
+import shutil
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
 
 app = FastAPI(
     title="API de mixOmics",
@@ -14,6 +18,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ------------------------------------------------------------------------------
+# Funciones (para comprobar cosas)
+# ------------------------------------------------------------------------------
+
+
 
 # ------------------------------------------------------------------------------
 # Esquemas (para validar los tipos de datos :v)
@@ -32,15 +42,16 @@ async def health():
     """
     return {"status": "Todo bien gente, toy sano! la vida es bella"}
 
-
 @app.get("/v1/archivos/", status_code=status.HTTP_200_OK)
-async def get_archivos():
-    """
-    Endpoint para listar los archivos cargados en la carpeta de datos.
+async def get_archivos(request: Request): # <- Agregas request: Request
+    data_dir = request.app.state.DATA_DIR   # <- Lees la ruta del estado global
     
-    TODO: Crear carpeta y modelar funcionamiento (usar libreria os)
-    """
-    pass
+    try:
+        elementos = os.listdir(data_dir)
+        archivos = [f for f in elementos if os.path.isfile(os.path.join(data_dir, f))]    
+        return {"archivos": archivos, "total": len(archivos), "ruta": data_dir}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al leer la carpeta: {str(e)}")
 
 
 @app.post("/v1/reporte/", status_code=status.HTTP_200_OK)
@@ -52,14 +63,22 @@ async def crear_reporte():
     """
     pass
 
-@app.post("/v1/cargar/", status_code=status.HTTP_201_CREATED)
-async def cargar_data():
-    """
-    Endpoint para cargar datos locales, manejarlos en una carpeta interna.
-
-    TODO: Ajustar parametros, 
-    """
-    pass
+@app.post("/v1/archivos/", status_code=status.HTTP_201_CREATED)
+async def cargar_data(request: Request, file: UploadFile = File(...)):
+    data_dir = request.app.state.DATA_DIR
+    nombre_seguro = os.path.basename(file.filename)
+    ruta_archivo = os.path.join(data_dir, nombre_seguro)
+    
+    try:
+        with open(ruta_archivo, "wb") as buffer_destino:
+            shutil.copyfileobj(file.file, buffer_destino)
+            
+        return {"mensaje": "Archivo subido", "nombre": nombre_seguro}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        file.file.close()
+    
 
 @app.post("/v1/model/", status_code=status.HTTP_201_CREATED)
 async def ejecutar_modelo():
@@ -80,10 +99,16 @@ async def ejecutar_modelo_llm():
     pass
 
 @app.delete("/v1/archivos/", status_code=status.HTTP_200_OK)
-async def delete_archivos(nombre_archivo: str):
-    """
-    Endpoint para borrar un archivo de la carpeta de datos.
+async def delete_archivos(request: Request, nombre_archivo: str):
+    data_dir = request.app.state.DATA_DIR
+    nombre_seguro = os.path.basename(nombre_archivo)
+    ruta_archivo = os.path.join(data_dir, nombre_seguro)
     
-    TODO: Usar os.
-    """
-    pass
+    if not os.path.exists(ruta_archivo):
+        raise HTTPException(status_code=404, detail="El archivo no existe.")
+    
+    try:
+        os.remove(ruta_archivo)
+        return {"mensaje": f"Archivo eliminado."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
