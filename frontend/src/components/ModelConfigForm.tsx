@@ -1,42 +1,56 @@
+import { type ReactNode } from 'react';
+import { useIntl } from 'react-intl';
 import { useProject } from '../lib/project-state';
 import type { ModelType, ModelConfig } from '../lib/types';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 
 type Props = {
   onValidChange?: (isValid: boolean) => void;
 };
 
+/**
+ * Función de fragmento de react-intl: recibe las partes del mensaje que
+ * caen dentro de una etiqueta (`<code>`) y devuelve el nodo.
+ */
+type Chunks = (chunks: string[]) => ReactNode;
+
+/**
+ * Opciones de modelo. La descripción vive en el catálogo de mensajes
+ * (`descriptionKey`): el copy es traducible, el nombre del modelo no.
+ */
 const MODEL_OPTIONS: Array<{
   value: ModelType;
   label: string;
-  description: string;
+  descriptionKey: MessageKey;
   requiresKeepX: boolean;
   requiresClasses: boolean;
 }> = [
   {
     value: 'PCA',
     label: 'PCA',
-    description: 'Análisis de componentes principales (no supervisado).',
+    descriptionKey: 'model.descPCA',
     requiresKeepX: false,
     requiresClasses: false,
   },
   {
     value: 'PLS-DA',
     label: 'PLS-DA',
-    description: 'PLS para clasificación supervisada.',
+    descriptionKey: 'model.descPLSDA',
     requiresKeepX: false,
     requiresClasses: true,
   },
   {
     value: 'sPLS-DA',
     label: 'sPLS-DA',
-    description: 'PLS-DA + selección de variables (LASSO). Biomarcadores.',
+    descriptionKey: 'model.descSPLSDA',
     requiresKeepX: true,
     requiresClasses: true,
   },
   {
     value: 'DIABLO',
     label: 'DIABLO',
-    description: 'Integración multi-bloque supervisada (block sPLS-DA).',
+    descriptionKey: 'model.descDIABLO',
     requiresKeepX: true,
     requiresClasses: true,
   },
@@ -49,6 +63,23 @@ const MODEL_OPTIONS: Array<{
 export function ModelConfigForm({ onValidChange }: Props) {
   const { state, setModelConfig } = useProject();
   const cfg = state.modelConfig;
+  const t = useTranslate();
+  const intl = useIntl();
+
+  /**
+   * Traduce un mensaje con marcado en línea.
+   *
+   * `useTranslate()` solo admite valores primitivos, así que las etiquetas
+   * con marcado usan `intl.formatMessage` con funciones de fragmento. El
+   * tipo de la clave se sigue validando contra el catálogo.
+   */
+  const rich = (id: MessageKey, values: Record<string, Chunks>) =>
+    intl.formatMessage({ id }, values);
+
+  /** Términos técnicos en monoespaciada (keepX). */
+  const code: Chunks = (chunks) => (
+    <code className="font-mono text-pharma-700">{chunks}</code>
+  );
 
   const selectedOption = MODEL_OPTIONS.find((o) => o.value === cfg.model_type);
   const requiresKeepX = selectedOption?.requiresKeepX ?? false;
@@ -71,11 +102,11 @@ export function ModelConfigForm({ onValidChange }: Props) {
     <form
       className="space-y-5"
       onSubmit={(e) => e.preventDefault()}
-      aria-label="Configuración del modelo"
+      aria-label={t('model.formLabel')}
     >
       <div>
         <label htmlFor="model_type" className="label">
-          Tipo de modelo
+          {t('model.typeLabel')}
         </label>
         <select
           id="model_type"
@@ -99,7 +130,7 @@ export function ModelConfigForm({ onValidChange }: Props) {
         </select>
         {selectedOption && (
           <p className="text-xs text-slate-500 mt-1">
-            {selectedOption.description}
+            {t(selectedOption.descriptionKey)}
           </p>
         )}
       </div>
@@ -107,7 +138,7 @@ export function ModelConfigForm({ onValidChange }: Props) {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label htmlFor="filename" className="label">
-            Archivo de datos
+            {t('model.fileLabel')}
           </label>
           <select
             id="filename"
@@ -118,8 +149,8 @@ export function ModelConfigForm({ onValidChange }: Props) {
           >
             <option value="">
               {requiresFile
-                ? '— Elige un archivo —'
-                : '— Carga un archivo en el paso 1 —'}
+                ? t('model.chooseFile')
+                : t('model.loadFileFirst')}
             </option>
             {state.files.map((f) => (
               <option key={f.filename} value={f.filename}>
@@ -131,7 +162,7 @@ export function ModelConfigForm({ onValidChange }: Props) {
 
         <div>
           <label htmlFor="n_components" className="label">
-            Nº de componentes
+            {t('model.componentsLabel')}
           </label>
           <input
             id="n_components"
@@ -150,7 +181,7 @@ export function ModelConfigForm({ onValidChange }: Props) {
       {requiresKeepX && (
         <div>
           <label htmlFor="keepX" className="label">
-            <code className="font-mono text-pharma-700">keepX</code> — variables por componente
+            {rich('model.keepXLabel', { code })}
           </label>
           <input
             id="keepX"
@@ -164,7 +195,7 @@ export function ModelConfigForm({ onValidChange }: Props) {
             }
           />
           <p className="text-xs text-slate-500 mt-1">
-            Cantidad de variables que el LASSO retiene por componente (1–1000).
+            {t('model.keepXHelp')}
           </p>
         </div>
       )}
@@ -174,14 +205,16 @@ export function ModelConfigForm({ onValidChange }: Props) {
           role="alert"
           className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2"
         >
-          Faltan datos para ejecutar el análisis.{' '}
-          {!requiresFile && 'Carga al menos un archivo en el paso 1. '}
-          {cfg.filename.trim().length === 0 && requiresFile && 'Elige un archivo. '}
+          {t('model.invalidMissing')}{' '}
+          {!requiresFile && `${t('model.invalidNoFile')} `}
+          {cfg.filename.trim().length === 0 &&
+            requiresFile &&
+            `${t('model.invalidNoSelection')} `}
           {cfg.n_components < 1 || cfg.n_components > 10
-            ? 'Nº de componentes debe estar entre 1 y 10. '
+            ? `${t('model.invalidComponents')} `
             : ''}
           {requiresKeepX && (cfg.keepX === undefined || cfg.keepX < 1)
-            ? 'Indica keepX.'
+            ? t('model.invalidKeepX')
             : ''}
         </p>
       )}

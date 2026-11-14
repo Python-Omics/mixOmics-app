@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { ModelConfigForm } from '../components/ModelConfigForm';
+import { api } from '../lib/api';
 import { useProject } from '../lib/project-state';
+import { useTranslate } from '../i18n';
 
 type Props = {
   onBack: () => void;
@@ -12,6 +14,7 @@ export function ConfigurePage({ onBack, onNext }: Props) {
   const [isValid, setIsValid] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslate();
 
   const handleExecute = async () => {
     if (!isValid || executing) return;
@@ -20,19 +23,22 @@ export function ConfigurePage({ onBack, onNext }: Props) {
     setResult(null);
 
     try {
-      const res = await window.pyxAPI.api.post('/v1/model/', state.modelConfig);
+      const res = await api.runModel(state.modelConfig);
       if (res.ok) {
         setResult(res.data ?? null);
         onNext();
       } else {
         setError(
-          `El backend respondió con error: HTTP ${res.status}${
-            res.error ? ' — ' + res.error : ''
-          }`,
+          t('configure.backendError', {
+            status: res.status,
+            detail: res.error ? ` — ${res.error}` : '',
+          }),
         );
       }
     } catch (err) {
-      setError(`No se pudo contactar el backend: ${(err as Error).message}`);
+      setError(
+        t('configure.backendUnreachable', { detail: (err as Error).message }),
+      );
     } finally {
       setExecuting(false);
     }
@@ -42,11 +48,10 @@ export function ConfigurePage({ onBack, onNext }: Props) {
     <div className="max-w-3xl space-y-5">
       <header>
         <h2 className="text-lg font-semibold text-pharma-700">
-          Configurar modelo
+          {t('configure.title')}
         </h2>
         <p className="text-sm text-slate-600 mt-1">
-          Elige el tipo de análisis multivariado y sus parámetros. La nomenclatura
-          científica se mantiene en inglés (PCA, sPLS-DA, DIABLO…).
+          {t('configure.description')}
         </p>
       </header>
 
@@ -65,7 +70,7 @@ export function ConfigurePage({ onBack, onNext }: Props) {
 
       <footer className="flex justify-between pt-2">
         <button type="button" className="btn-secondary" onClick={onBack}>
-          ← Volver
+          {t('configure.back')}
         </button>
         <button
           type="button"
@@ -73,7 +78,7 @@ export function ConfigurePage({ onBack, onNext }: Props) {
           onClick={handleExecute}
           disabled={!isValid || executing}
         >
-          {executing ? 'Ejecutando…' : 'Ejecutar análisis →'}
+          {executing ? t('configure.running') : t('configure.run')}
         </button>
       </footer>
     </div>

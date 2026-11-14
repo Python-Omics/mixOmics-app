@@ -30,8 +30,9 @@ export type BackendLogEntry = {
 export type ModelType = 'PCA' | 'PLS-DA' | 'sPLS-DA' | 'DIABLO';
 
 /**
- * Configuración mínima de un modelo para /v1/model/.
- * En esta POC los campos son placeholders; el backend aún no los procesa.
+ * Configuración mínima de un modelo para POST /v1/model/.
+ * Viaja como JSON al backend; los nombres de los campos siguen la
+ * nomenclatura de mixOmics (RNF-U-3).
  */
 export type ModelConfig = {
   model_type: ModelType;
@@ -42,8 +43,8 @@ export type ModelConfig = {
 };
 
 /**
- * Biomarcador devuelto por el análisis. Forma esperada cuando el backend
- * esté implementado (alineada con `ResumenBiomarcadores` del Avance §5.1).
+ * Biomarcador devuelto por el análisis (alineada con `ResumenBiomarcadores`
+ * del Avance §5.1).
  */
 export type Biomarker = {
   variable_id: string;
@@ -74,13 +75,33 @@ export type ApiResponse<T = unknown> = {
   error?: string;
 };
 
-/** Response de POST /v1/cargar/ (subida de un CSV al backend). */
+/** Response de GET /v1/archivos/ (archivos cargados en el backend). */
+export type FilesResponse = {
+  archivos: string[];
+  total: number;
+  ruta: string;
+};
+
+/** Response de POST /v1/archivos/ (subida multipart de un CSV). */
 export type UploadResponse = {
-  ok: boolean;
-  filename: string;
-  size: number;
-  /** true si fue una creación, false si reemplazó un archivo existente. */
-  created: boolean;
+  mensaje: string;
+  nombre: string;
+};
+
+/** Response de DELETE /v1/archivos/?nombre_archivo=... */
+export type DeleteResponse = {
+  mensaje: string;
+};
+
+/**
+ * Registro de una llamada al backend. Lo usa el mock de Playwright para
+ * verificar contra qué rutas pega el frontend (tests E2E).
+ */
+export type ApiCallRecord = {
+  method: string;
+  path: string;
+  body?: unknown;
+  filename?: string;
 };
 
 export interface PyxAPI {
@@ -96,6 +117,12 @@ export interface PyxAPI {
     get<T = unknown>(path: string): Promise<ApiResponse<T>>;
     post<T = unknown>(path: string, body?: unknown): Promise<ApiResponse<T>>;
     delete<T = unknown>(path: string): Promise<ApiResponse<T>>;
+    /** Sube un archivo como multipart/form-data (campo `file`). */
+    upload(
+      path: string,
+      filename: string,
+      content: string,
+    ): Promise<ApiResponse<UploadResponse>>;
   };
 
   onBackendLog(callback: (entry: BackendLogEntry) => void): () => void;
@@ -108,5 +135,10 @@ export interface PyxAPI {
 declare global {
   interface Window {
     pyxAPI: PyxAPI;
+    /**
+     * Llamadas al backend registradas por el mock de Playwright.
+     * Solo existe en el entorno de tests.
+     */
+    __apiCalls?: ApiCallRecord[];
   }
 }

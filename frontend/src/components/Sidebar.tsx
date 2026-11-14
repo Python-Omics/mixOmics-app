@@ -1,7 +1,10 @@
 import type { Step } from '../lib/types';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 import { CheckIcon, SettingsIcon } from './icons';
 
-type StepDef = { id: Step; label: string };
+/** Cada paso apunta a su clave de mensaje: el copy vive en el catálogo. */
+type StepDef = { id: Step; labelKey: MessageKey };
 
 type Props = {
   steps: StepDef[];
@@ -18,6 +21,7 @@ export function Sidebar({
   onOpenSettings,
   onGoHome,
 }: Props) {
+  const t = useTranslate();
   const currentIndex = steps.findIndex((s) => s.id === currentStep);
 
   return (
@@ -30,18 +34,18 @@ export function Sidebar({
           <button
             type="button"
             onClick={onGoHome}
-            title="Ir a Inicio"
+            title={t('nav.goHome')}
             className="rounded-md hover:text-pharma-100 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pharma-300"
           >
             Pythomics
           </button>
         </h1>
         <p className="text-xs text-pharma-200 mt-1">
-          Análisis multi-ómico · POC v0.1.0
+          {t('nav.subtitle')}
         </p>
       </div>
 
-      <nav className="flex-1 p-4" aria-label="Pasos del flujo">
+      <nav className="flex-1 p-4" aria-label={t('nav.stepsLabel')}>
         <ol className="space-y-2">
           {steps.map((s, idx) => {
             const active = s.id === currentStep;
@@ -72,7 +76,7 @@ export function Sidebar({
                   >
                     {completed ? <CheckIcon className="w-4 h-4" /> : idx + 1}
                   </span>
-                  <span className="text-sm font-medium">{s.label}</span>
+                  <span className="text-sm font-medium">{t(s.labelKey)}</span>
                 </button>
               </li>
             );
@@ -85,10 +89,10 @@ export function Sidebar({
           type="button"
           onClick={onOpenSettings}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-pharma-200 hover:bg-pharma-800 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pharma-300"
-          aria-label="Abrir configuración"
+          aria-label={t('nav.openSettings')}
         >
           <SettingsIcon className="w-5 h-5" />
-          <span className="text-sm font-medium">Configuración</span>
+          <span className="text-sm font-medium">{t('nav.settings')}</span>
         </button>
       </div>
     </aside>

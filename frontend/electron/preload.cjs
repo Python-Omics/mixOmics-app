@@ -7,8 +7,9 @@
  *   - contextIsolation + sandbox activos (ver electron/main.cjs).
  *   - Se expone una única API `window.pyxAPI` vía contextBridge.
  *   - El renderer NO tiene acceso a Node, fs, ni ipcRenderer directamente.
- *   - Todo el tráfico HTTP al backend va por el handler `api:request`
- *     (main → fetch a 127.0.0.1:8501). El renderer nunca toca el puerto.
+ *   - Todo el tráfico HTTP al backend va por los handlers `api:request`
+ *     (JSON) y `api:upload` (multipart/form-data), que hacen el fetch a
+ *     127.0.0.1:8501. El renderer nunca toca el puerto.
  *   - Los streams (logs del backend) llegan por eventos IPC y se devuelven
  *     al callback; cada `onXxx()` retorna un `unsubscribe()` para limpieza.
  */
@@ -30,6 +31,9 @@ contextBridge.exposeInMainWorld('pyxAPI', {
       ipcRenderer.invoke('api:request', { method: 'POST', path, body }),
     delete: (path) =>
       ipcRenderer.invoke('api:request', { method: 'DELETE', path }),
+    // Subida de archivos: viaja como multipart/form-data (campo `file`).
+    upload: (path, filename, content) =>
+      ipcRenderer.invoke('api:upload', { path, filename, content }),
   },
 
   // --- Streams del subproceso ---

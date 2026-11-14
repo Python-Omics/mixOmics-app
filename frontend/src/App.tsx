@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { ProjectProvider } from './lib/project-state';
+import { useTranslate } from './i18n';
+import type { MessageKey } from './i18n/messages';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { HomePage } from './pages/HomePage';
@@ -11,13 +13,18 @@ import { TutorialModal } from './components/TutorialModal';
 import { ExampleDatasetsModal } from './components/ExampleDatasetsModal';
 import type { Screen, Step } from './lib/types';
 
-const STEPS: Array<{ id: Step; label: string }> = [
-  { id: 'load', label: 'Cargar datos' },
-  { id: 'configure', label: 'Configurar modelo' },
-  { id: 'results', label: 'Resultados' },
+/**
+ * Pasos del pipeline. El texto visible vive en el catálogo de mensajes:
+ * cada paso apunta a su clave, no a un literal.
+ */
+const STEPS: Array<{ id: Step; labelKey: MessageKey }> = [
+  { id: 'load', labelKey: 'nav.load' },
+  { id: 'configure', labelKey: 'nav.configure' },
+  { id: 'results', labelKey: 'nav.results' },
 ];
 
 function AppShell() {
+  const t = useTranslate();
   const [screen, setScreen] = useState<Screen>('home');
   const [step, setStep] = useState<Step>('load');
   const [showSettings, setShowSettings] = useState(false);
@@ -34,7 +41,7 @@ function AppShell() {
       ) : (
         <div className="flex h-screen w-screen overflow-hidden bg-pharma-50">
           <a href="#main-content" className="skip-link">
-            Saltar al contenido principal
+            {t('app.skipToContent')}
           </a>
 
           <Sidebar
@@ -55,7 +62,7 @@ function AppShell() {
             <main
               id="main-content"
               className="flex-1 overflow-auto p-6"
-              aria-label="Contenido principal"
+              aria-label={t('app.mainContent')}
               tabIndex={-1}
             >
               {step === 'load' && (

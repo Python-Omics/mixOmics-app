@@ -3,8 +3,12 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type ReactNode,
 } from 'react';
+import { useIntl } from 'react-intl';
 import type { UploadedFile, PreviewData } from '../lib/project-state';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 import { FileIcon } from './icons';
 
 type Props = {
@@ -12,6 +16,12 @@ type Props = {
 };
 
 const ACCEPTED_EXT = ['.csv', '.tsv'] as const;
+
+/**
+ * Función de fragmento de react-intl: recibe las partes del mensaje que
+ * caen dentro de una etiqueta (`<code>`) y devuelve el nodo.
+ */
+type Chunks = (chunks: string[]) => ReactNode;
 
 /**
  * Parsea las primeras N líneas del texto como preview.
@@ -28,6 +38,23 @@ export function FileDropzone({ onFileAdded }: Props) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  const t = useTranslate();
+  const intl = useIntl();
+
+  /**
+   * Traduce un mensaje con marcado en línea.
+   *
+   * `useTranslate()` solo admite valores primitivos, así que los párrafos
+   * con marcado usan `intl.formatMessage` con funciones de fragmento. El
+   * tipo de la clave se sigue validando contra el catálogo.
+   */
+  const rich = (id: MessageKey, values: Record<string, Chunks>) =>
+    intl.formatMessage({ id }, values);
+
+  /** Extensiones de archivo en monoespaciada (.csv, .tsv). */
+  const code: Chunks = (chunks) => (
+    <code className="font-mono text-pharma-700">{chunks}</code>
+  );
 
   const handleFiles = useCallback(
     async (files: FileList | null) => {
@@ -41,7 +68,7 @@ export function FileDropzone({ onFileAdded }: Props) {
           const ext = ACCEPTED_EXT.find((e) => lower.endsWith(e));
           if (!ext) {
             setError(
-              `Formato no soportado: "${file.name}". Solo se aceptan .csv o .tsv.`,
+              t('file.unsupportedFormat', { filename: file.name }),
             );
             continue;
           }
@@ -51,7 +78,7 @@ export function FileDropzone({ onFileAdded }: Props) {
           const preview = parsePreview(text, sep);
 
           if (preview.rows === 0) {
-            setError(`"${file.name}" está vacío.`);
+            setError(t('file.emptyFile', { filename: file.name }));
             continue;
           }
 
@@ -67,7 +94,7 @@ export function FileDropzone({ onFileAdded }: Props) {
         setReading(false);
       }
     },
-    [onFileAdded],
+    [onFileAdded, t],
   );
 
   const onDragOver = (e: DragEvent<HTMLLabelElement>) => {
@@ -100,7 +127,7 @@ export function FileDropzone({ onFileAdded }: Props) {
             ? 'border-pharma-400 bg-pharma-100'
             : 'border-pharma-200 hover:border-pharma-400 hover:bg-pharma-50'
         }`}
-        aria-label="Arrastra archivos CSV o TSV, o haz clic para elegirlos"
+        aria-label={t('file.dropLabel')}
       >
         <input
           id="file-input"
@@ -115,13 +142,10 @@ export function FileDropzone({ onFileAdded }: Props) {
           <FileIcon className="w-12 h-12 mx-auto" />
         </div>
         <p className="text-slate-700 font-medium">
-          Arrastra tus archivos <code className="font-mono text-pharma-700">.csv</code>{' '}
-          o <code className="font-mono text-pharma-700">.tsv</code>
+          {rich('file.dropTitle', { code })}
         </p>
         <p id="file-help" className="text-sm text-slate-500 mt-1">
-          {reading
-            ? 'Leyendo…'
-            : 'o haz clic para elegirlos desde tu equipo'}
+          {reading ? t('file.reading') : t('file.dropHelp')}
         </p>
       </label>
 

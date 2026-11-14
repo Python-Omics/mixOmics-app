@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 // Cubre pesos 100-900 + italic en un solo archivo.
 import '@fontsource-variable/inter';
 import App from './App';
+import { I18nProvider } from './i18n';
 import './styles/globals.css';
 
 const container = document.getElementById('root');
@@ -13,7 +14,9 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <I18nProvider>
+      <App />
+    </I18nProvider>
   </StrictMode>,
 );
 

@@ -1,34 +1,20 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-locale="es" data-theme="pharmacy-fresh">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:8501 ws://127.0.0.1:5173 http://localhost:5173 ws://localhost:5173;" />
     <title>Pythomics — Análisis multi-ómico</title>
-    <script>
-      // Anti-FOUC: aplica el tema persistido ANTES del primer paint.
-      // Sin esto, el navegador pinta el tema por defecto y luego salta al
-      // guardado,，产生 un flash visible.
-      (function () {
-        try {
-          var stored = localStorage.getItem('pythomics.theme');
-          var valid = [
-            'pharmacy-fresh',
-            'sterile-aqua',
-            'minted-hygiene',
-            'soft-bandage',
-            'immunity-citrus',
-          ];
-          document.documentElement.setAttribute(
-            'data-theme',
-            valid.indexOf(stored) !== -1 ? stored : 'pharmacy-fresh',
-          );
-        } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'pharmacy-fresh');
-        }
-      })();
-    </script>
+    <!--
+      Anti-FOUC: aplica tema, idioma y título antes del primer paint.
+      Script bloqueante (sin defer/async) en <head>, antes del bundle de
+      React. Va como archivo externo y no inline porque la CSP tiene
+      `script-src 'self'` sin `'unsafe-inline'`: un script inline queda
+      bloqueado, uno del mismo origen no. Debe ir DESPUÉS del <title>
+      para que el parser no lo sobrescriba con el valor estático.
+    -->
+    <script src="/app-init.js"></script>
     <style>
       /* Splash screen: visible hasta que React monte y lo oculte */
       #splash {
@@ -58,6 +44,12 @@
         color: #64748b; /* slate-500: neutro, fijo */
         margin-top: -0.5rem;
       }
+      #splash .tagline::before {
+        content: attr(data-tagline-es);
+      }
+      [data-locale='en'] #splash .tagline::before {
+        content: attr(data-tagline-en);
+      }
       #splash .spinner {
         width: 32px;
         height: 32px;
@@ -78,7 +70,7 @@
     <!-- Splash screen: visible hasta que React monte -->
     <div id="splash" role="status" aria-live="polite">
       <div class="logo">Pythomics</div>
-      <div class="tagline">Análisis multi-ómico</div>
+      <div class="tagline" data-tagline-es="Análisis multi-ómico" data-tagline-en="Multi-omics analysis"></div>
       <div class="spinner" aria-hidden="true"></div>
     </div>
 

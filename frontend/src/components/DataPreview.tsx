@@ -1,4 +1,5 @@
 import type { PreviewData } from '../lib/project-state';
+import { useTranslate } from '../i18n';
 
 type Props = {
   filename: string;
@@ -10,12 +11,14 @@ type Props = {
  * Solo lectura: es para que el biólogo confirme que cargó el archivo correcto.
  */
 export function DataPreview({ filename, preview }: Props) {
+  const t = useTranslate();
+
   return (
     <div className="mt-3 border border-pharma-200 rounded-lg overflow-hidden bg-white">
       <div className="bg-pharma-50 px-3 py-2 text-xs font-mono text-pharma-700 border-b border-pharma-200 flex justify-between items-center">
         <span>{filename}</span>
         <span>
-          {preview.rows} filas × {preview.cols} columnas
+          {t('preview.dimensions', { rows: preview.rows, cols: preview.cols })}
         </span>
       </div>
       <div className="overflow-auto max-h-48">
@@ -37,7 +40,7 @@ export function DataPreview({ filename, preview }: Props) {
                 ))}
                 {row.length > 6 && (
                   <td className="px-2 py-1 text-slate-500 italic">
-                    +{row.length - 6} más
+                    {t('preview.moreColumns', { count: row.length - 6 })}
                   </td>
                 )}
               </tr>

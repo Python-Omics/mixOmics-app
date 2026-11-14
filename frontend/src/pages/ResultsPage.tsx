@@ -1,5 +1,6 @@
 import { useProject } from '../lib/project-state';
 import { ResultsPanel } from '../components/ResultsPanel';
+import { useTranslate } from '../i18n';
 
 type Props = {
   onBack: () => void;
@@ -8,6 +9,7 @@ type Props = {
 
 export function ResultsPage({ onBack, onRestart }: Props) {
   const { state, reset } = useProject();
+  const t = useTranslate();
 
   const handleRestart = () => {
     reset();
@@ -19,25 +21,25 @@ export function ResultsPage({ onBack, onRestart }: Props) {
       <header className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-pharma-700">
-            Resultados del análisis
+            {t('results.title')}
           </h2>
           <p className="text-sm text-slate-600 mt-1">
-            Modelo:{' '}
+            {t('results.summaryModel')}{' '}
             <code className="font-mono text-pharma-700">
               {state.modelConfig.model_type}
             </code>{' '}
-            · archivo:{' '}
+            · {t('results.summaryFile')}{' '}
             <code className="font-mono text-pharma-700">
               {state.modelConfig.filename}
             </code>{' '}
-            · componentes:{' '}
+            · {t('results.summaryComponents')}{' '}
             <code className="font-mono text-pharma-700">
               {state.modelConfig.n_components}
             </code>
             {state.modelConfig.keepX !== undefined && (
               <>
                 {' '}
-                · keepX:{' '}
+                · {t('results.summaryKeepX')}{' '}
                 <code className="font-mono text-pharma-700">
                   {state.modelConfig.keepX}
                 </code>
@@ -51,10 +53,10 @@ export function ResultsPage({ onBack, onRestart }: Props) {
 
       <footer className="flex justify-between pt-2">
         <button type="button" className="btn-secondary" onClick={onBack}>
-          ← Volver
+          {t('results.back')}
         </button>
         <button type="button" className="btn-ghost" onClick={handleRestart}>
-          Empezar de nuevo
+          {t('results.restart')}
         </button>
       </footer>
     </div>

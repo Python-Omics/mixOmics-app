@@ -2,16 +2,29 @@ import { useEffect, useRef, useState } from 'react';
 import { CloseIcon, PaletteIcon } from './icons';
 import { ThemeSelector } from './ThemeSelector';
 import { useTheme } from '../lib/use-theme';
+import { LANG_LABELS, LANGS, useLang, useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 
 type Props = {
   open: boolean;
   onClose: () => void;
 };
 
-/** Secciones del panel de configuración. Solo una activa por ahora. */
+/**
+ * Secciones del panel de configuración. Solo una activa por ahora.
+ * El `labelKey` es una clave de mensaje: el copy vive en el catálogo.
+ */
 const SECTIONS = [
-  { id: 'personalization', label: 'Personalización', icon: PaletteIcon },
-] as const;
+  {
+    id: 'personalization',
+    labelKey: 'settings.personalization',
+    icon: PaletteIcon,
+  },
+] as const satisfies ReadonlyArray<{
+  id: string;
+  labelKey: MessageKey;
+  icon: typeof PaletteIcon;
+}>;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
 
@@ -30,6 +43,8 @@ type SectionId = (typeof SECTIONS)[number]['id'];
 export function SettingsModal({ open, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const { theme, setTheme } = useTheme();
+  const { lang, setLang } = useLang();
+  const t = useTranslate();
   const [section, setSection] = useState<SectionId>('personalization');
 
   useEffect(() => {
@@ -70,10 +85,10 @@ export function SettingsModal({ open, onClose }: Props) {
         {/* ─── Sidebar de secciones ─────────────────────────────────────── */}
         <nav
           className="w-52 shrink-0 bg-pharma-700 p-3 flex flex-col"
-          aria-label="Secciones de configuración"
+          aria-label={t('settings.sectionsLabel')}
         >
           <p className="px-3 pt-1 pb-3 text-[10px] font-semibold uppercase tracking-wider text-pharma-100">
-            Secciones
+            {t('settings.sectionsHeading')}
           </p>
           <ul className="space-y-1">
             {SECTIONS.map((s) => {
@@ -92,7 +107,7 @@ export function SettingsModal({ open, onClose }: Props) {
                     }`}
                   >
                     <Icon className="w-4 h-4 shrink-0" />
-                    <span>{s.label}</span>
+                    <span>{t(s.labelKey)}</span>
                   </button>
                 </li>
               );
@@ -102,7 +117,7 @@ export function SettingsModal({ open, onClose }: Props) {
           {/* Espacio para futuras secciones (API key, backend, etc.) */}
           <div className="mt-auto pt-4 px-3 border-t border-pharma-800">
             <p className="text-[10px] text-pharma-200 leading-relaxed">
-              Más secciones próximamente.
+              {t('settings.moreSections')}
             </p>
           </div>
         </nav>
@@ -115,14 +130,14 @@ export function SettingsModal({ open, onClose }: Props) {
               id="settings-title"
               className="text-base font-semibold text-pharma-700"
             >
-              Configuración
+              {t('settings.title')}
             </h2>
             <button
               ref={closeRef}
               type="button"
               onClick={onClose}
               className="btn-ghost text-slate-500 hover:text-slate-700 shrink-0"
-              aria-label="Cerrar configuración"
+              aria-label={t('settings.closeLabel')}
             >
               <CloseIcon className="w-5 h-5" />
             </button>
@@ -131,17 +146,61 @@ export function SettingsModal({ open, onClose }: Props) {
           {/* Cuerpo scrolleable */}
           <div className="flex-1 overflow-y-auto p-5">
             {active.id === 'personalization' && (
-              <section aria-label="Personalización">
+              <section aria-label={t('settings.personalization')}>
                 <div className="flex items-center gap-2.5 mb-4">
                   <ActiveIcon className="w-4 h-4 text-pharma-500 shrink-0" />
                   <h3 className="text-sm font-semibold text-pharma-700">
-                    {active.label}
+                    {t(active.labelKey)}
                   </h3>
                 </div>
                 <p className="text-xs font-medium text-slate-700 mb-3">
-                  Tema de colores
+                  {t('settings.themeHeading')}
                 </p>
                 <ThemeSelector theme={theme} onChange={setTheme} />
+
+                {/* Selector de idioma — mismo patrón visual que los temas */}
+                <div className="mt-6">
+                  <p className="text-xs font-medium text-slate-700 mb-3">
+                    {t('settings.languageHeading')}
+                  </p>
+                  <div
+                    role="radiogroup"
+                    aria-label={t('settings.languageHeading')}
+                    className="space-y-2"
+                  >
+                    {LANGS.map((langOption) => {
+                      const selected = langOption === lang;
+                      return (
+                        <button
+                          key={langOption}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          aria-label={LANG_LABELS[langOption]}
+                          onClick={() => setLang(langOption)}
+                          className={`w-full flex items-center gap-3 rounded-lg border-2 px-3 py-2.5 transition-colors ${
+                            selected
+                              ? 'border-pharma-500 bg-pharma-50'
+                              : 'border-slate-200 bg-white hover:border-pharma-300 hover:bg-pharma-50'
+                          }`}
+                        >
+                          <span className="flex-1 text-left text-sm font-medium text-pharma-700">
+                            {LANG_LABELS[langOption]}
+                          </span>
+
+                          {selected && (
+                            <span
+                              className="text-[10px] font-semibold uppercase tracking-wide text-white bg-pharma-500 rounded-full px-2 py-0.5"
+                              aria-hidden="true"
+                            >
+                              {t('theme.active')}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </section>
             )}
           </div>
@@ -149,7 +208,7 @@ export function SettingsModal({ open, onClose }: Props) {
           {/* Footer */}
           <div className="flex justify-end p-4 px-5 border-t border-slate-200 shrink-0">
             <button type="button" onClick={onClose} className="btn-secondary">
-              Cerrar
+              {t('settings.close')}
             </button>
           </div>
         </div>

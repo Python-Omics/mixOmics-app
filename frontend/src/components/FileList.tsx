@@ -1,5 +1,7 @@
+import { useIntl } from 'react-intl';
 import { DataPreview } from './DataPreview';
 import type { UploadedFile } from '../lib/project-state';
+import { useTranslate } from '../i18n';
 import { ChartIcon, CloseIcon } from './icons';
 
 type Props = {
@@ -14,10 +16,13 @@ function formatSize(bytes: number): string {
 }
 
 export function FileList({ files, onRemove }: Props) {
+  const t = useTranslate();
+  const intl = useIntl();
+
   if (files.length === 0) return null;
 
   return (
-    <ul className="space-y-2" aria-label="Archivos cargados">
+    <ul className="space-y-2" aria-label={t('file.listLabel')}>
       {files.map((f) => (
         <li key={f.filename} className="card p-4">
           <div className="flex items-start justify-between gap-4">
@@ -32,7 +37,10 @@ export function FileList({ files, onRemove }: Props) {
                   </p>
                   <p className="text-xs text-slate-500">
                     {formatSize(f.size)} ·{' '}
-                    {new Date(f.uploadedAt).toLocaleTimeString('es-CL')}
+                    {/* La hora sigue el idioma activo (provider de react-intl). */}
+                    {intl.formatTime(new Date(f.uploadedAt), {
+                      timeStyle: 'short',
+                    })}
                   </p>
                 </div>
               </div>
@@ -44,7 +52,7 @@ export function FileList({ files, onRemove }: Props) {
               type="button"
               onClick={() => onRemove(f.filename)}
               className="btn-ghost text-red-700 hover:bg-red-50"
-              aria-label={`Quitar ${f.filename}`}
+              aria-label={t('file.removeLabel', { filename: f.filename })}
             >
               <CloseIcon className="w-4 h-4" />
             </button>

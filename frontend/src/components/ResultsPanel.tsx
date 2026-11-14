@@ -1,9 +1,19 @@
+import type { ReactNode } from 'react';
+import { useIntl } from 'react-intl';
 import type { Biomarker } from '../lib/types';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 import { BiomarkersTable } from './BiomarkersTable';
 
 type Props = {
   result: unknown;
 };
+
+/**
+ * Función de fragmento de react-intl: recibe las partes del mensaje que
+ * caen dentro de una etiqueta (`<code>`) y devuelve el nodo.
+ */
+type Chunks = (chunks: string[]) => ReactNode;
 
 /**
  * Intenta extraer una lista de biomarcadores de la forma esperada
@@ -38,19 +48,32 @@ function extractBiomarkers(result: unknown): Biomarker[] {
 export function ResultsPanel({ result }: Props) {
   const biomarkers = extractBiomarkers(result);
   const hasResult = result !== null && result !== undefined;
+  const t = useTranslate();
+  const intl = useIntl();
+
+  /**
+   * Traduce un mensaje con marcado en línea.
+   *
+   * `useTranslate()` solo admite valores primitivos, así que los párrafos
+   * con marcado usan `intl.formatMessage` con funciones de fragmento. El
+   * tipo de la clave se sigue validando contra el catálogo.
+   */
+  const rich = (id: MessageKey, values: Record<string, Chunks>) =>
+    intl.formatMessage({ id }, values);
+
+  /** Rutas y claves de la API en monoespaciada. */
+  const code: Chunks = (chunks) => (
+    <code className="font-mono">{chunks}</code>
+  );
 
   if (!hasResult) {
     return (
       <div className="card p-6 border-amber-200 bg-amber-50">
         <h3 className="text-sm font-semibold text-amber-900">
-          Sin resultados todavía
+          {t('results.emptyTitle')}
         </h3>
         <p className="text-sm text-amber-800 mt-1">
-          El endpoint <code className="font-mono">/v1/model/</code> del backend
-          está pendiente de implementar. Cuando devuelva un objeto con la clave
-          <code className="font-mono"> biomarkers</code> (array de variables con
-          loading, componente y estabilidad), este panel mostrará la tabla
-          correspondiente.
+          {rich('results.emptyBody', { code })}
         </p>
       </div>
     );
@@ -63,7 +86,7 @@ export function ResultsPanel({ result }: Props) {
       <div className="card overflow-hidden">
         <div className="px-4 py-3 border-b border-pharma-200 bg-pharma-50 flex justify-between items-center">
           <h3 className="text-sm font-semibold text-pharma-700">
-            Resultado crudo
+            {t('results.rawTitle')}
           </h3>
           <span className="text-xs text-pharma-500 font-mono">JSON</span>
         </div>

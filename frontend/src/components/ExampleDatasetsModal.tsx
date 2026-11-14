@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useIntl } from 'react-intl';
 import { CloseIcon } from './icons';
 import { useProject, type PreviewData } from '../lib/project-state';
 import { EXAMPLE_DATASETS, type ExampleDataset } from '../lib/example-datasets';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 
 const MODEL_BADGE: Record<ExampleDataset['suggestedModel'], string> = {
   PCA: 'PCA',
@@ -9,6 +12,12 @@ const MODEL_BADGE: Record<ExampleDataset['suggestedModel'], string> = {
   'sPLS-DA': 'sPLS-DA',
   DIABLO: 'DIABLO',
 };
+
+/**
+ * Función de fragmento de react-intl: recibe las partes del mensaje que
+ * caen dentro de una etiqueta (`<code>`, `<strong>`) y devuelve el nodo.
+ */
+type Chunks = (chunks: string[]) => ReactNode;
 
 type LoadState =
   | { kind: 'idle' }
@@ -39,6 +48,26 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const { addFile, setModelConfig } = useProject();
   const [state, setState] = useState<LoadState>({ kind: 'idle' });
+  const t = useTranslate();
+  const intl = useIntl();
+
+  /**
+   * Traduce un mensaje con marcado en línea.
+   *
+   * `useTranslate()` solo admite valores primitivos, así que los párrafos
+   * con marcado usan `intl.formatMessage` con funciones de fragmento. El
+   * tipo de la clave se sigue validando contra el catálogo.
+   */
+  const rich = (id: MessageKey, values: Record<string, Chunks>) =>
+    intl.formatMessage({ id }, values);
+
+  /** Términos técnicos en monoespaciada (mixOmics). */
+  const code: Chunks = (chunks) => (
+    <code className="font-mono text-pharma-700">{chunks}</code>
+  );
+
+  /** Énfasis del texto (la parte en negrita del mensaje). */
+  const strong: Chunks = (chunks) => <strong>{chunks}</strong>;
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +91,9 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
         allFiles.map(async (filename) => {
           const res = await fetch(`/datasets/${filename}`);
           if (!res.ok) {
-            throw new Error(`HTTP ${res.status} al pedir ${filename}`);
+            throw new Error(
+              t('datasets.httpError', { status: res.status, filename }),
+            );
           }
           const text = await res.text();
           return { filename, text };
@@ -71,7 +102,7 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
 
       for (const { filename, text } of responses) {
         if (!text.trim()) {
-          throw new Error(`El archivo ${filename} está vacío`);
+          throw new Error(t('datasets.emptyFile', { filename }));
         }
         const sep = filename.endsWith('.tsv') ? '\t' : ',';
         const preview = parseCsvPreview(text, sep);
@@ -80,6 +111,9 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
           size: text.length,
           uploadedAt: Date.now(),
           preview,
+          // Guardamos el texto crudo: sin `content` el dataset se
+          // subiría vacío al backend.
+          content: text,
         });
       }
 
@@ -96,7 +130,10 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
     } catch (err) {
       setState({
         kind: 'error',
-        message: `No se pudo cargar ${dataset.name}: ${(err as Error).message}`,
+        message: t('datasets.loadError', {
+          name: dataset.name,
+          detail: (err as Error).message,
+        }),
       });
     }
   };
@@ -125,11 +162,10 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
               id="example-datasets-title"
               className="text-lg font-semibold text-pharma-700"
             >
-              Probar con dataset de ejemplo
+              {t('datasets.title')}
             </h2>
             <p className="text-xs text-slate-600 mt-0.5">
-              Datasets reales de <code className="font-mono text-pharma-700">mixOmics</code> pre-empaquetados.
-              Listos para usarse.
+              {rich('datasets.subtitle', { code })}
             </p>
           </div>
           <button
@@ -137,7 +173,7 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
             type="button"
             onClick={onClose}
             className="btn-ghost text-slate-500 hover:text-slate-700"
-            aria-label="Cerrar datasets de ejemplo"
+            aria-label={t('datasets.closeLabel')}
           >
             <CloseIcon className="w-5 h-5" />
           </button>
@@ -152,7 +188,10 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
           </p>
         )}
 
-        <ul className="space-y-2 max-h-[50vh] overflow-y-auto pr-1" aria-label="Lista de datasets de ejemplo">
+        <ul
+          className="space-y-2 max-h-[50vh] overflow-y-auto pr-1"
+          aria-label={t('datasets.listLabel')}
+        >
           {EXAMPLE_DATASETS.map((ds) => {
             const isLoading = state.kind === 'loading' && state.id === ds.id;
             const disabled = state.kind === 'loading';
@@ -171,16 +210,23 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                     </span>
                     {ds.additionalFiles && ds.additionalFiles.length > 0 && (
                       <span className="text-xs text-slate-500">
-                        +{ds.additionalFiles.length} bloque
-                        {ds.additionalFiles.length === 1 ? '' : 's'}
+                        {t('datasets.extraBlocks', {
+                          count: ds.additionalFiles.length,
+                        })}
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-slate-500 mt-1">{ds.description}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {t(ds.descriptionKey)}
+                  </p>
                   <p className="text-xs text-slate-400 mt-0.5 font-mono">
                     {ds.nSamples} × {ds.nFeatures}
                     {ds.metaColumns && ds.metaColumns.length > 0 && (
-                      <> · clase: {ds.metaColumns.join(', ')}</>
+                      <>
+                        {t('datasets.metaColumns', {
+                          columns: ds.metaColumns.join(', '),
+                        })}
+                      </>
                     )}
                   </p>
                 </div>
@@ -189,9 +235,9 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                   onClick={() => handleLoad(ds)}
                   disabled={disabled}
                   className="btn-primary shrink-0"
-                  aria-label={`Cargar dataset ${ds.name}`}
+                  aria-label={t('datasets.loadLabel', { name: ds.name })}
                 >
-                  {isLoading ? 'Cargando…' : 'Cargar'}
+                  {isLoading ? t('datasets.loading') : t('datasets.load')}
                 </button>
               </li>
             );
@@ -200,8 +246,7 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
 
         <div className="mt-5 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs text-slate-500">
-            El botón <strong>Cargar</strong> trae todos los bloques del dataset.
-            Para multi-bloque (DIABLO) el set completo ya queda listo.
+            {rich('datasets.footerNote', { strong })}
           </p>
           {onOpenTutorial && (
             <button
@@ -211,9 +256,9 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                 onOpenTutorial();
               }}
               className="btn-primary shrink-0"
-              aria-label="Abrir el tutorial: ¿cómo usar?"
+              aria-label={t('datasets.howToLabel')}
             >
-              ¿Cómo usar? →
+              {t('datasets.howTo')}
             </button>
           )}
         </div>

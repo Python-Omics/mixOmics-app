@@ -1,34 +1,43 @@
 /**
  * Wrapper sobre window.pyxAPI.api con tipos y atajos.
  * Mantén los métodos alineados con los endpoints reales del backend FastAPI.
+ *
+ * Este módulo es la única fuente de verdad de las rutas: las páginas
+ * llaman acá y nunca escriben una URL a mano.
  */
 
-import type { ApiResponse, ModelConfig, UploadResponse } from './types';
+import type {
+  ApiResponse,
+  DeleteResponse,
+  FilesResponse,
+  ModelConfig,
+  UploadResponse,
+} from './types';
 
 export const api = {
   /** Healthcheck del backend local */
   health: () => window.pyxAPI.api.get<{ status: string }>('/v1/health'),
 
   /** Lista de archivos actualmente cargados en el backend */
-  listFiles: () => window.pyxAPI.api.get<string[]>('/v1/archivos/'),
+  listFiles: () => window.pyxAPI.api.get<FilesResponse>('/v1/archivos/'),
 
   /**
    * Sube un CSV al backend.
    *
-   * Body: `{ filename, content }` con content como string UTF-8 del CSV.
-   * En esta POC el endpoint /v1/cargar/ está como placeholder (devuelve null),
-   * así que el frontend sigue funcionando aunque el backend no haga nada todavía.
+   * El backend espera multipart/form-data con el campo `file`, así que la
+   * subida viaja por el canal `api:upload` del puente IPC (no por `api:request`).
+   * `content` es el texto UTF-8 del CSV.
    */
-  uploadFile: (filename: string, content: string) =>
-    window.pyxAPI.api.post<UploadResponse>('/v1/cargar/', {
-      filename,
-      content,
-    }),
+  uploadFile: (
+    filename: string,
+    content: string,
+  ): Promise<ApiResponse<UploadResponse>> =>
+    window.pyxAPI.api.upload('/v1/archivos/', filename, content),
 
-  /** Borra un archivo por nombre (NO por path) */
+  /** Borra un archivo por nombre (NO por path): va como query param */
   deleteFile: (filename: string) =>
-    window.pyxAPI.api.delete<{ ok: boolean }>(
-      `/v1/archivos/${encodeURIComponent(filename)}`,
+    window.pyxAPI.api.delete<DeleteResponse>(
+      `/v1/archivos/?nombre_archivo=${encodeURIComponent(filename)}`,
     ),
 
   /** Ejecuta un modelo multivariado y devuelve el resultado */

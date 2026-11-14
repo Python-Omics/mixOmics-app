@@ -1,19 +1,26 @@
 import { ChartIcon, SettingsIcon } from '../components/icons';
+import { useTranslate } from '../i18n';
+import type { MessageKey } from '../i18n/messages';
 
 type Props = {
   onStart: () => void;
   onOpenSettings: () => void;
 };
 
-/** Candidatos visibles en la franja de roadmap del pie de Inicio. */
-const ROADMAP = [
-    '¿Reanudar último análisis?',
-    '¿Nota de privacidad local?',
-    '¿Gestión de proyectos?',
-    '¿Tutorial y documentación?',
-    '¿Reportar un problema?',
-    '¿Enlace a la organización con repositorio de app y librería core?'
-];
+/**
+ * Candidatos visibles en la franja de roadmap del pie de Inicio.
+ *
+ * Son claves de mensaje, no literales: el copy vive en el catálogo y el
+ * `satisfies` convierte un typo en un error de TypeScript.
+ */
+const ROADMAP_KEYS = [
+  'home.roadmap.resume',
+  'home.roadmap.privacy',
+  'home.roadmap.projects',
+  'home.roadmap.docs',
+  'home.roadmap.report',
+  'home.roadmap.github',
+] as const satisfies readonly MessageKey[];
 
 /**
  * Pantalla de Inicio — punto de entrada a la app.
@@ -44,10 +51,12 @@ const ROADMAP = [
  * interactivos todavía y presentarlos como botones sería mentir sobre el estado.
  */
 export function HomePage({ onStart, onOpenSettings }: Props) {
+  const t = useTranslate();
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-pharma-50">
       <a href="#main-content" className="skip-link">
-        Saltar al contenido principal
+        {t('app.skipToContent')}
       </a>
 
       <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-pharma-200 shrink-0">
@@ -57,23 +66,22 @@ export function HomePage({ onStart, onOpenSettings }: Props) {
           type="button"
           onClick={onOpenSettings}
           className="btn-secondary"
-          aria-label="Abrir configuración"
+          aria-label={t('home.openSettings')}
         >
           <SettingsIcon className="w-4 h-4" />
-          <span>Configuración</span>
+          <span>{t('home.settings')}</span>
         </button>
       </header>
 
       <main
         id="main-content"
         tabIndex={-1}
-        aria-label="Contenido principal"
+        aria-label={t('app.mainContent')}
         className="flex-1 flex items-center justify-center overflow-auto p-6"
       >
         <div className="max-w-2xl text-center space-y-8">
           <p className="text-xl text-slate-600 leading-relaxed">
-            Análisis multi-ómico local para biólogos e investigadores.
-            Más opciones en esta pantalla próximamente.
+            {t('home.tagline')}
           </p>
 
           <button
@@ -82,7 +90,7 @@ export function HomePage({ onStart, onOpenSettings }: Props) {
             className="btn-primary text-base px-6 py-3"
           >
             <ChartIcon className="w-5 h-5" />
-            <span>Iniciar integración multiómica</span>
+            <span>{t('home.cta')}</span>
           </button>
         </div>
       </main>
@@ -94,11 +102,11 @@ export function HomePage({ onStart, onOpenSettings }: Props) {
       <footer className="shrink-0 border-t border-pharma-200 bg-white px-6 py-5">
         <div className="mx-auto max-w-2xl">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Próximamente en Inicio
+            {t('home.roadmap.title')}
           </h2>
           <ul className="mt-3 grid grid-cols-1 gap-x-8 gap-y-1.5 text-sm text-slate-600 sm:grid-cols-2">
-            {ROADMAP.map((item) => (
-              <li key={item}>{item}</li>
+            {ROADMAP_KEYS.map((key) => (
+              <li key={key}>{t(key)}</li>
             ))}
           </ul>
         </div>

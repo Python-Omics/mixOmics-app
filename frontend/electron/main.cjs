@@ -6,17 +6,42 @@
  * Responsabilidades:
  *   - Crear BrowserWindow con sandbox/contextIsolation seguros.
  *   - Antes de mostrar la UI, levantar el backend FastAPI local.
- *   - Exponer IPC handlers (api:request, backend:status, backend:restart)
- *     y forward de logs del subproceso al renderer.
+ *   - Exponer IPC handlers (api:request, api:upload, backend:status,
+ *     backend:restart) y forward de logs del subproceso al renderer.
  *   - Cleanup: matar el subproceso al cerrar la ventana.
  */
 
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('electron');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { BackendManager } = require('./backend.cjs');
 
 const isDev = process.env.PYTHOMICS_DEV === '1';
 const BACKEND_PORT = 8501;
+
+// Esquema propio para servir el bundle de producción.
+//
+// Por qué no file:// — con loadFile() el documento tiene origen opaco ('null'),
+// y la CSP con 'self' no matchea: el bundle JS/CSS entero queda bloqueado y
+// la app no arranca (#root vacío). Con un esquema registrado como 'standard',
+// el origen es app://pythomics, la CSP puede usar 'self' sin relajarse y el
+// guard de path traversal lo hace explícito.
+const APP_SCHEME = 'app';
+const APP_HOST = 'pythomics';
+const DIST_DIR = path.join(__dirname, '..', 'dist');
+
+// registerSchemesAsPrivileged debe ejecutarse ANTES de que Electron esté ready.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: APP_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 /**
  * Detecta si el entorno es Linux con un compositor Wayland estricto
@@ -57,17 +82,111 @@ const projectRoot = path.resolve(__dirname, '..', '..');
 const backendDir = path.join(projectRoot, 'backend');
 
 /** @type {BrowserWindow | null} */
+/**
+ * Smoke de producción.
+ *
+ * Con PYTHOMICS_SMOKE=1 la app arranca contra el build compilado, verifica
+ * que el renderer montó y que la CSP no bloqueó nada, y sale con código 0/1.
+ *
+ * Existe porque la build de producción estuvo rota (origen file:// opaco →
+ * la CSP bloqueaba el bundle entero) y nadie lo notó: toda la sesión se
+ * desarrolló con `npm run dev`, donde el build roto no se manifiesta.
+ *
+ * Uso:  npm run smoke
+ */
+function setupSmokeCheck() {
+  if (process.env.PYTHOMICS_SMOKE !== '1') return;
+
+  const violations = [];
+  mainWindow.webContents.on('console-message', (_event, level, message) => {
+    if (/Content Security Policy|Refused to/i.test(message)) {
+      violations.push(String(message).slice(0, 300));
+    }
+  });
+
+  mainWindow.webContents.on('did-finish-load', async () => {
+    // Dar tiempo a que React monte.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+
+    let info = null;
+    try {
+      info = await mainWindow.webContents.executeJavaScript(`({
+        url: location.href,
+        origin: location.origin,
+        theme: document.documentElement.getAttribute('data-theme'),
+        rootLen: (document.getElementById('root') || {}).innerHTML?.length ?? -1,
+        h1: (document.querySelector('h1') || {}).textContent ?? null,
+      })`);
+    } catch (err) {
+      console.error('[smoke] no se pudo evaluar el renderer:', err.message);
+    }
+
+    const checks = [
+      ['el renderer montó', Boolean(info && info.rootLen > 0)],
+      ['hay un <h1> en la página', Boolean(info && info.h1)],
+      ['el tema se aplicó', Boolean(info && info.theme)],
+      ['sin violaciones de CSP', violations.length === 0],
+    ];
+    if (!isDev) {
+      checks.push([
+        'origen real app:// (no file:// opaco)',
+        Boolean(info && info.origin === 'app://pythomics'),
+      ]);
+    }
+
+    console.log(`[smoke] ${JSON.stringify(info)}`);
+    let ok = true;
+    for (const [name, passed] of checks) {
+      console.log(`[smoke] ${passed ? 'OK   ' : 'FALLA'} ${name}`);
+      if (!passed) ok = false;
+    }
+    for (const v of violations) {
+      console.error('[smoke] violacion CSP:', v);
+    }
+
+    app.exit(ok ? 0 : 1);
+  });
+}
+
 let mainWindow = null;
 /** @type {BackendManager | null} */
 let backend = null;
 
+/**
+ * Sirve dist/ bajo app://pythomics/.
+ *
+ * El guard de path traversal es explícito: aunque el esquema sea privileges,
+ * una ruta con '..' no debe poder salirse de dist/.
+ */
+function registerAppProtocol() {
+  protocol.handle(APP_SCHEME, async (request) => {
+    let pathname;
+    try {
+      pathname = decodeURIComponent(new URL(request.url).pathname);
+    } catch {
+      return new Response('Bad Request', { status: 400 });
+    }
+
+    const relative = pathname.replace(/^\/+/, '') || 'index.html';
+    const resolved = path.resolve(path.join(DIST_DIR, relative));
+
+    if (resolved !== DIST_DIR && !resolved.startsWith(DIST_DIR + path.sep)) {
+      console.error('[main] path traversal bloqueado:', request.url);
+      return new Response('Forbidden', { status: 403 });
+    }
+
+    return net.fetch(pathToFileURL(resolved).toString());
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
+    // Sin `title`: la ventana sigue el <title> del documento, que app-init.js
+    // ajusta al idioma antes del primer paint.
     width: 1280,
     height: 800,
     minWidth: 1024,
     minHeight: 700,
-    title: 'Pythomics — Análisis multi-ómico',
     backgroundColor: '#f8fafc',
     show: false, // se muestra manualmente cuando el backend está listo
     webPreferences: {
@@ -87,7 +206,9 @@ function createWindow() {
     mainWindow.loadURL('http://127.0.0.1:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+    // Origen real (app://pythomics) en vez de file://, para que la CSP
+    // pueda usar 'self' sin relajar la política.
+    mainWindow.loadURL(`${APP_SCHEME}://${APP_HOST}/index.html`);
   }
 
   // Diagnóstico: log de eventos del renderer para detectar crashes temprano
@@ -185,9 +306,46 @@ function setupIpc() {
       return { ok: false, status: 0, error: err.message };
     }
   });
+
+  // Subida de archivos: el backend espera multipart/form-data, no JSON.
+  // Va aparte de `api:request` porque esa ruta siempre manda
+  // Content-Type: application/json.
+  ipcMain.handle('api:upload', async (_event, payload) => {
+    const apiPath = (payload && payload.path) || '/';
+    const filename = (payload && payload.filename) || '';
+    const content = (payload && payload.content) || '';
+
+    const url = `http://127.0.0.1:${BACKEND_PORT}${apiPath}`;
+    try {
+      const form = new FormData();
+      // El MIME se deriva de la extensión: el dropzone acepta .csv y .tsv
+      // (RB-14), y mandarlos todos como text/csv sería incorrecto para
+      // los tab-separados.
+      const mime = filename.toLowerCase().endsWith('.tsv')
+        ? 'text/tab-separated-values'
+        : 'text/csv';
+      form.append('file', new Blob([content], { type: mime }), filename);
+      // OJO: NO setear Content-Type a mano. fetch lo arma con el boundary
+      // correcto; si se define a mano, el boundary queda mal y FastAPI
+      // rechaza el archivo.
+      const res = await fetch(url, { method: 'POST', body: form });
+      const contentType = res.headers.get('content-type') || '';
+      const data = contentType.includes('application/json')
+        ? await res.json().catch(() => null)
+        : await res.text();
+      return { ok: res.ok, status: res.status, data };
+    } catch (err) {
+      return { ok: false, status: 0, error: err.message };
+    }
+  });
 }
 
 app.whenReady().then(() => {
+  // El esquema app:// solo puede handler-arse con la app ya lista.
+  if (!isDev) {
+    registerAppProtocol();
+  }
+
   backend = new BackendManager({
     backendDir,
     port: BACKEND_PORT,
@@ -196,6 +354,7 @@ app.whenReady().then(() => {
 
   setupIpc();
   createWindow();
+  setupSmokeCheck();
   // Mostrar la UI de inmediato (no bloqueamos esperando al backend).
   // El badge de estado refleja "Conectando…" hasta que /v1/health
   // responda, y se actualiza en vivo vía el stream backend:log.
@@ -206,6 +365,11 @@ app.whenReady().then(() => {
   // Arrancar el backend en background. Si falla, mostrar un diálogo
   // informativo pero sin bloquear la UI.
   backend.start({ timeoutMs: 30000 }).catch((err) => {
+    // En smoke no mostramos el diálogo: es modal y bloquearía la verificación.
+    if (process.env.PYTHOMICS_SMOKE === '1') {
+      console.error('[smoke] el backend no pudo iniciarse:', err.message);
+      return;
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       dialog.showMessageBox(mainWindow, {
         type: 'warning',
