@@ -6,8 +6,9 @@ estructurado, y el renderer formatea el mensaje con ICU contra el catálogo
 español viaja por la API: lo que viaja es un código estable y datos
 estructurados que el renderer usa para interpolar sus propios textos.
 
-Convención de ``message_key``: ``errors.<camelCaseDelCodigo>``, derivado
-programáticamente del código, por ejemplo:
+Convención de ``message_key`` para errores:
+``errors.<camelCaseDelCodigo>``, derivado programáticamente del código, por
+ejemplo:
 
 * ``E_DUPLICATE_SAMPLES`` → ``errors.duplicateSamples``
 * ``E_NO_COMMON_SAMPLES`` → ``errors.noCommonSamples``
@@ -17,6 +18,12 @@ La derivación es determinística: el mismo código produce siempre la misma
 clave, sin escribirla a mano. Para agregar un código nuevo basta con
 declararlo en :class:`ErrorCode`; la clave de i18n y el estado HTTP se
 resuelven solos.
+
+Los avisos de ingesta no son errores y no tienen estado HTTP. Usan códigos
+propios en :class:`WarningCode` y la clave
+``ingest.warnings.<camelCaseDelCodigo>``. Viajan en
+``IngestResponse.warnings`` y el renderer los traduce con el ``message_key``
+que acompaña a cada aviso.
 """
 
 from enum import StrEnum
@@ -31,6 +38,10 @@ class ErrorCode(StrEnum):
     Cada código tiene un estado HTTP asociado en
     :data:`HTTP_STATUS_BY_CODE` y una clave de i18n derivada en
     :data:`MESSAGE_KEY_BY_CODE`.
+
+    ``E_NOT_NUMERIC`` ya no se lanza desde la ingesta: esta acepta tablas
+    categóricas y registra su clasificación. Se usa al validar un model
+    request que requiera un bloque de variables numéricas.
     """
 
     # Validación de la carga (RB-14, RF-1)
@@ -64,6 +75,19 @@ class ErrorCode(StrEnum):
     E_UNEXPECTED = "E_UNEXPECTED"
     E_NOT_IMPLEMENTED = "E_NOT_IMPLEMENTED"
     E_UNAUTHORIZED = "E_UNAUTHORIZED"
+
+
+class WarningCode(StrEnum):
+    """Códigos de avisos de ingesta que no interrumpen la carga.
+
+    A diferencia de :class:`ErrorCode`, estos avisos no tienen estado HTTP.
+    Se incluyen en ``IngestResponse.warnings``; cada uno lleva su
+    ``message_key`` derivado con :func:`derive_warning_message_key` para que
+    el renderer lo traduzca.
+    """
+
+    W_NON_NUMERIC_COLUMNS = "W_NON_NUMERIC_COLUMNS"
+    W_ENCODING_REPAIRED = "W_ENCODING_REPAIRED"
 
 
 #: Estado HTTP de cada código, según la columna HTTP de §5.4.
@@ -109,6 +133,31 @@ def derive_message_key(code: str) -> str:
 #: Clave de i18n de cada código, derivada de forma determinística.
 MESSAGE_KEY_BY_CODE: dict[ErrorCode, str] = {
     code: derive_message_key(code.value) for code in ErrorCode
+}
+
+
+def derive_warning_message_key(code: WarningCode | str) -> str:
+    """Deriva la clave de i18n de un aviso de ingesta.
+
+    Regla: se quita el prefijo ``W_``, se pasa el resto a minúsculas y se
+    une en camelCase; la clave final es ``ingest.warnings.<camelCase>``.
+
+    Ejemplos: ``W_NON_NUMERIC_COLUMNS`` →
+    ``ingest.warnings.nonNumericColumns`` y ``W_ENCODING_REPAIRED`` →
+    ``ingest.warnings.encodingRepaired``.
+    """
+    codigo = code.value if isinstance(code, WarningCode) else code
+    sufijo = codigo.removeprefix("W_")
+    partes = [parte for parte in sufijo.lower().split("_") if parte]
+    if not partes:
+        raise ValueError(f"No se puede derivar la clave de i18n del aviso {code!r}.")
+    camel = partes[0] + "".join(parte.capitalize() for parte in partes[1:])
+    return f"ingest.warnings.{camel}"
+
+
+#: Clave de i18n de cada aviso, derivada de forma determinística.
+WARNING_MESSAGE_KEY_BY_CODE: dict[WarningCode, str] = {
+    code: derive_warning_message_key(code) for code in WarningCode
 }
 
 

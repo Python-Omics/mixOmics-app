@@ -5,31 +5,64 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { ModelConfig } from './types';
+import type {
+  IngestWarning,
+  ModelConfig,
+  UploadResponse,
+} from './types';
 
 /**
  * Estado del "proyecto" del biólogo en la sesión actual.
  * Persiste solo en memoria (RNF-S-3: no se sube nada al backend).
  */
 
+/** Vista previa producida por el backend durante la ingesta. */
 export type PreviewData = {
-  rows: number;
-  cols: number;
-  sample: string[][];
+  columns: string[];
+  rows: string[][];
 };
+
+/**
+ * Rol de un archivo dentro del proyecto.
+ *
+ * - `block`: matriz de variables del modelo (PCA, DIABLO).
+ * - `metadata`: tabla de fenotipo (variable de clase, genotipo, dieta, ...).
+ *
+ * El rol NO se deduce del dtype de las columnas ni del nombre del archivo:
+ * los fenotipos de mixOmics vienen codificados como enteros (`genotype` 1/2,
+ * `diet` 1/3/5), así que una tabla de metadata puede tener todas sus
+ * columnas numéricas. Lo determina el origen del archivo: para los datasets
+ * de ejemplo, el `metaFile` del catálogo (`lib/example-datasets.ts`).
+ */
+export type FileRole = 'block' | 'metadata';
 
 export type UploadedFile = {
   filename: string;
   size: number;
   uploadedAt: number;
-  /** Preview local (no se persiste, opcional) */
+  /**
+   * Rol del archivo en el proyecto: matriz de variables o tabla de
+   * metadata (fenotipo).
+   */
+  role: FileRole;
+  /** Vista previa devuelta por el backend. */
   preview?: PreviewData;
   /**
-   * Contenido crudo del CSV (UTF-8). Opcional — se popula solo cuando el
-   * FileDropzone quiere que el backend pueda reenviarlo (POST /v1/cargar/).
-   * Para esta POC, los CSVs son chicos, así que tenerlo en memoria es OK.
+   * Ruta del archivo en disco. Es lo que usan los archivos que el usuario
+   * elige o arrastra: el renderer NUNCA los lee, el proceso Electron los
+   * lee del disco y los sube.
+   */
+  path?: string;
+  /**
+   * Texto crudo. SOLO para los datasets de ejemplo pre-empaquetados: son
+   * assets estáticos que el renderer descarga por HTTP, así que no hay una
+   * ruta en disco que el backend pueda leer. Nunca para archivos del usuario.
    */
   content?: string;
+  /** Metadatos del bloque devueltos por la ingesta. */
+  block?: UploadResponse['block'];
+  /** Advertencias no bloqueantes devueltas por la ingesta. */
+  warnings?: IngestWarning[];
 };
 
 export type ModelResult = unknown;

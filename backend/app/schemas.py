@@ -226,8 +226,116 @@ class Health(BaseModel):
 
 
 # ------------------------------------------------------------------------------
-# Archivos (compatibles con frontend/src/lib/types.ts)
+# Archivos e ingesta (compatibles con frontend/src/lib/types.ts)
 # ------------------------------------------------------------------------------
+
+
+class IngestWarning(BaseModel):
+    """Aviso no bloqueante detectado durante la ingesta de un bloque."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    code: str = Field(
+        ...,
+        description="Código canónico del aviso (W_*).",
+    )
+    message_key: str = Field(
+        ...,
+        description=(
+            "Clave i18n que el renderer resuelve "
+            "(ingest.warnings.<camelCaseDelCodigo>)."
+        ),
+    )
+    columns: list[str] = Field(
+        default_factory=list,
+        description="Columnas afectadas por el aviso, cuando corresponde.",
+    )
+    detail: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Datos estructurados del aviso.",
+    )
+
+
+class BlockSummary(BaseModel):
+    """Resumen de un bloque ingerido que vuelve al renderer.
+
+    Es distinto de :class:`BlockRef`: la referencia pertenece a la receta
+    interna e incluye la ruta y todos los IDs de muestra, pero no lleva la
+    clasificación de columnas. Este resumen incluye esa clasificación y no
+    incluye los IDs, porque una matriz puede tener decenas de miles de
+    muestras y la respuesta debe permanecer ligera.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(
+        ...,
+        description="Nombre del bloque, derivado del nombre del archivo sin extensión.",
+    )
+    filename: str = Field(
+        ...,
+        description="Nombre seguro del archivo ingerido.",
+    )
+    n_samples: int = Field(
+        ...,
+        description="Cantidad de muestras (filas) del bloque.",
+    )
+    n_variables: int = Field(
+        ...,
+        description=(
+            "Cantidad total de variables (columnas sin el ID de muestra) "
+            "del bloque."
+        ),
+    )
+    n_numeric_variables: int = Field(
+        ...,
+        description="Cantidad de variables del bloque que son numéricas por dtype.",
+    )
+    columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Nombres de hasta 100 columnas de variables, en orden. "
+            "El total completo se obtiene de n_variables."
+        ),
+    )
+    sample_id_column: str = Field(
+        ...,
+        description="Nombre de la primera columna, que contiene los IDs de muestra.",
+    )
+
+
+class PreviewData(BaseModel):
+    """Vista previa acotada de un bloque ingerido."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    columns: list[str] = Field(
+        ...,
+        description="Nombres de las columnas incluidas en la vista previa.",
+    )
+    rows: list[list[str]] = Field(
+        ...,
+        description="Filas de la vista previa, con todos los valores como texto.",
+    )
+
+
+class IngestResponse(BaseModel):
+    """Respuesta de la ingesta validada de un bloque de datos."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    block: BlockSummary = Field(
+        ...,
+        description="Resumen del bloque ingerido.",
+    )
+    warnings: list[IngestWarning] = Field(
+        default_factory=list,
+        description="Avisos no bloqueantes detectados durante la validación.",
+    )
+    preview: PreviewData = Field(
+        ...,
+        description="Vista previa acotada del bloque.",
+    )
 
 
 class FilesResponse(BaseModel):
@@ -281,7 +389,13 @@ class DeleteResponse(BaseModel):
 
 
 class BlockRef(BaseModel):
-    """Referencia a un bloque de datos: nombre, ruta y forma."""
+    """Referencia interna a un bloque de datos: nombre, ruta, forma e IDs.
+
+    Este modelo representa el bloque **dentro de la receta** de análisis y no
+    transporta la clasificación de sus columnas. El resumen que vuelve al
+    renderer tras la ingesta usa :class:`BlockSummary` y no transporta la
+    lista de IDs.
+    """
 
     model_config = ConfigDict(extra="ignore")
 

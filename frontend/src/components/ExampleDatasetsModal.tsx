@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useIntl } from 'react-intl';
 import { CloseIcon } from './icons';
-import { useProject, type PreviewData } from '../lib/project-state';
+import { useProject, type FileRole } from '../lib/project-state';
+import { api } from '../lib/api';
 import { EXAMPLE_DATASETS, type ExampleDataset } from '../lib/example-datasets';
 import { useTranslate } from '../i18n';
 import type { MessageKey } from '../i18n/messages';
@@ -19,18 +20,22 @@ const MODEL_BADGE: Record<ExampleDataset['suggestedModel'], string> = {
  */
 type Chunks = (chunks: string[]) => ReactNode;
 
+/**
+ * Archivo que quedó cargado en el backend, con su rol.
+ *
+ * El rol lo declara el catálogo del dataset (el `metaFile` es la tabla de
+ * fenotipo), no el dtype de sus columnas: los fenotipos de mixOmics vienen
+ * codificados como enteros.
+ */
+type LoadedFile = {
+  filename: string;
+  role: FileRole;
+};
+
 type LoadState =
   | { kind: 'idle' }
   | { kind: 'loading'; id: string }
-  | { kind: 'error'; message: string };
-
-function parseCsvPreview(text: string, sep: string): PreviewData {
-  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
-  const sample = lines.slice(0, 6).map((line) => line.split(sep));
-  const rows = lines.length;
-  const cols = sample[0]?.length ?? 0;
-  return { rows, cols, sample };
-}
+  | { kind: 'error'; message: string; loaded: LoadedFile[] };
 
 type Props = {
   open: boolean;
@@ -81,14 +86,22 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
 
   const handleLoad = async (dataset: ExampleDataset) => {
     setState({ kind: 'loading', id: dataset.id });
-    try {
-      // Traemos todos los bloques del dataset en paralelo:
-      // el principal + los adicionales (si hay). El biólogo no tiene que
-      // hacer nada más para tener el set completo listo para DIABLO.
-      const allFiles = [dataset.primaryFile, ...(dataset.additionalFiles ?? [])];
 
-      const responses = await Promise.all(
-        allFiles.map(async (filename) => {
+    // Orden de subida: primero los bloques numéricos y al final la tabla
+    // de metadata (el fenotipo). Al backend le da igual, pero en la UI el
+    // phenotype queda a la vista al final.
+    const allFiles = [
+      dataset.primaryFile,
+      ...(dataset.additionalFiles ?? []),
+      ...(dataset.metaFile ? [dataset.metaFile] : []),
+    ];
+
+    // 1) Descarga de los assets estáticos. Van en paralelo porque no
+    //    dependen entre sí, pero un fallo NO aborta el lote: se anota y se
+    //    sigue con los demás.
+    const downloaded = await Promise.all(
+      allFiles.map(async (filename) => {
+        try {
           const res = await fetch(`/datasets/${filename}`);
           if (!res.ok) {
             throw new Error(
@@ -96,46 +109,103 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
             );
           }
           const text = await res.text();
-          return { filename, text };
-        }),
-      );
-
-      for (const { filename, text } of responses) {
-        if (!text.trim()) {
-          throw new Error(t('datasets.emptyFile', { filename }));
+          if (!text.trim()) {
+            throw new Error(t('datasets.emptyFile', { filename }));
+          }
+          return { filename, text, error: null as string | null };
+        } catch (err) {
+          return { filename, text: null, error: (err as Error).message };
         }
-        const sep = filename.endsWith('.tsv') ? '\t' : ',';
-        const preview = parseCsvPreview(text, sep);
+      }),
+    );
+
+    // 2) Subida secuencial (el orden define el orden en la UI) y tolerante
+    //    a fallos: un archivo que falla se reporta y el lote sigue.
+    const failures: { filename: string; message: string }[] = [];
+    const loaded: LoadedFile[] = [];
+    let modelFile = '';
+
+    for (const item of downloaded) {
+      if (item.text === null) {
+        failures.push({
+          filename: item.filename,
+          message: item.error ?? '',
+        });
+        continue;
+      }
+      const { filename, text } = item;
+      try {
+        // Los datasets de ejemplo son assets estáticos de Vite: no tienen
+        // una ruta local que Electron pueda abrir. Se envían como contenido
+        // por el fallback del canal de subida y el backend devuelve el
+        // preview y el resumen de ingesta.
+        const upload = await api.uploadFile('', filename, text);
+        if (!upload.ok || !upload.data) {
+          throw new Error(upload.apiError?.code ?? `HTTP ${upload.status}`);
+        }
+
+        const summary = upload.data;
+        // El rol lo declara el catálogo del dataset: `metaFile` es la tabla
+        // de fenotipo (variable de clase), el resto son matrices de
+        // variables del modelo.
+        const role: FileRole =
+          dataset.metaFile && filename === dataset.metaFile
+            ? 'metadata'
+            : 'block';
         addFile({
-          filename,
+          filename: summary.block.filename || filename,
           size: text.length,
           uploadedAt: Date.now(),
-          preview,
-          // Guardamos el texto crudo: sin `content` el dataset se
-          // subiría vacío al backend.
+          preview: summary.preview,
+          block: summary.block,
+          warnings: summary.warnings,
+          role,
+          // Excepción consciente: el texto existe solo para este asset
+          // estático, que el renderer descarga por HTTP. Nunca se usa para
+          // archivos elegidos por el usuario.
           content: text,
         });
+
+        loaded.push({
+          filename: summary.block.filename || filename,
+          role,
+        });
+        // El modelo se configura sobre una matriz de variables: la tabla de
+        // metadata alimenta la variable de clase, no las variables.
+        if (role === 'block' && !modelFile) {
+          modelFile = summary.block.filename || filename;
+        }
+      } catch (err) {
+        failures.push({ filename, message: (err as Error).message });
       }
+    }
 
-      // Solo el principal se preselecciona para el modelo.
-      // (Los adicionales quedan en el FileList y el biólogo decide
-      // qué hacer con ellos cuando implementemos multi-bloque.)
-      setModelConfig({
-        filename: dataset.primaryFile,
-        model_type: dataset.suggestedModel,
-      });
+    // Solo un bloque numérico se preselecciona para el modelo.
+    // (Los demás quedan en el FileList y el biólogo decide
+    // qué hacer con ellos cuando implementemos multi-bloque.)
+    setModelConfig({
+      filename: modelFile,
+      model_type: dataset.suggestedModel,
+    });
 
-      setState({ kind: 'idle' });
-      onClose();
-    } catch (err) {
+    if (failures.length > 0) {
+      // Los archivos que sí entraron quedan en el proyecto: el error se
+      // reporta, pero el lote no se descarta.
       setState({
         kind: 'error',
         message: t('datasets.loadError', {
           name: dataset.name,
-          detail: (err as Error).message,
+          detail: failures
+            .map((f) => `${f.filename}: ${f.message}`)
+            .join('; '),
         }),
+        loaded,
       });
+      return;
     }
+
+    setState({ kind: 'idle' });
+    onClose();
   };
 
   if (!open) return null;
@@ -180,12 +250,27 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
         </div>
 
         {state.kind === 'error' && (
-          <p
+          <div
             role="alert"
             className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 mb-3"
           >
-            {state.message}
-          </p>
+            <p>{state.message}</p>
+            {state.loaded.length > 0 && (
+              <ul className="list-disc pl-4 mt-1">
+                {state.loaded.map((file) => (
+                  <li key={file.filename}>
+                    <span className="font-mono">{file.filename}</span>
+                    {file.role === 'metadata' && (
+                      <span className="italic">
+                        {' '}
+                        {t('ingest.metadataBlock')}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
 
         <ul
@@ -215,6 +300,16 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                         })}
                       </span>
                     )}
+                    {/*
+                      La tabla de metadata (fenotipo) se distingue de los
+                      bloques numéricos: el catálogo del dataset declara
+                      cuál es su `metaFile`.
+                    */}
+                    {ds.metaFile && (
+                      <span className="text-xs text-slate-500 italic">
+                        {t('ingest.metadataBlock')}
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
                     {t(ds.descriptionKey)}
@@ -229,6 +324,11 @@ export function ExampleDatasetsModal({ open, onClose, onOpenTutorial }: Props) {
                       </>
                     )}
                   </p>
+                  {ds.metaFile && (
+                    <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                      {ds.metaFile}
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"

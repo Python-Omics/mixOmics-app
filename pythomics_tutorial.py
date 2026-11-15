@@ -104,8 +104,10 @@ def load_nutrimouse(
         raise ValueError(f"RB-1: hay sample IDs duplicados en {meta_csv.name}.")
 
     # Bloques. Asignamos sample_id copiando del meta fila a fila.
-    gene_df = pd.read_csv(gene_csv)
-    lipid_df = pd.read_csv(lipid_csv)
+    # index_col=0: el ID de muestra es la primera columna del CSV (la
+    # convención del Avance). Sin esto, el ID entraría como una variable más.
+    gene_df = pd.read_csv(gene_csv, index_col=0)
+    lipid_df = pd.read_csv(lipid_csv, index_col=0)
 
     # debe haber misma cantidad de filas en los tres archivos.
     if not (len(gene_df) == len(lipid_df) == len(meta)):

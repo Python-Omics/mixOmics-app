@@ -16,6 +16,7 @@ error en :mod:`app.errors`.
 
 import os
 import shutil
+from pathlib import Path
 
 from fastapi import (
     Depends,
@@ -31,12 +32,14 @@ from fastapi.responses import JSONResponse
 from app.auth import TOKEN_HEADER, check_token
 from app.capabilities import probe_capabilities_async
 from app.errors import ErrorCode, PythomicsError
+from app.ingest import SUPPORTED_EXTENSIONS, parse_block
 from app.paths import resolve_data_dir
 from app.schemas import (
+    BlockSummary,
     DeleteResponse,
     FilesResponse,
     Health,
-    UploadResponse,
+    IngestResponse,
 )
 
 
@@ -161,22 +164,35 @@ def get_archivos(request: Request) -> FilesResponse:
 
 @app.post(
     "/v1/archivos/",
-    response_model=UploadResponse,
+    response_model=IngestResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def cargar_data(request: Request, file: UploadFile = File(...)) -> UploadResponse:
-    """Recibe un archivo y lo guarda en el directorio de datos.
+def cargar_data(request: Request, file: UploadFile = File(...)) -> IngestResponse:
+    """Recibe, guarda y valida un bloque CSV/TSV.
 
-    Todavía **no valida** la extensión (.csv/.tsv, RB-14) ni los IDs de
-    muestra duplicados (RB-1): eso es la ingesta, tarea T3. Acá solo se guarda
-    el archivo.
+    La extensión se comprueba **antes** de escribir (RB-14). Después se
+    guarda el archivo, se valida con :func:`app.ingest.parse_block` y se
+    devuelve el resumen y la vista previa. Si la validación falla, el archivo
+    inválido se elimina para no dejar basura en el directorio de datos.
     """
     data_dir = request.app.state.DATA_DIR
     nombre_seguro = os.path.basename(file.filename or "")
-    ruta_archivo = os.path.join(data_dir, nombre_seguro)
+    extension = Path(nombre_seguro).suffix.lower()
+
+    if extension not in SUPPORTED_EXTENSIONS:
+        file.file.close()
+        raise PythomicsError(
+            ErrorCode.E_FILE_EXTENSION,
+            detail={
+                "file": nombre_seguro,
+                "allowed_extensions": sorted(SUPPORTED_EXTENSIONS),
+            },
+        )
+
+    ruta_archivo = Path(data_dir) / nombre_seguro
 
     try:
-        with open(ruta_archivo, "wb") as buffer_destino:
+        with ruta_archivo.open("wb") as buffer_destino:
             shutil.copyfileobj(file.file, buffer_destino)
     except OSError as exc:
         raise PythomicsError(
@@ -186,7 +202,32 @@ def cargar_data(request: Request, file: UploadFile = File(...)) -> UploadRespons
     finally:
         file.file.close()
 
-    return UploadResponse(mensaje="Archivo subido", nombre=nombre_seguro)
+    try:
+        parsed = parse_block(ruta_archivo, nombre_seguro)
+    except PythomicsError:
+        # La carga es una operación de guardado: si el bloque no supera la
+        # validación, no debe quedar un archivo que luego se liste como válido.
+        try:
+            ruta_archivo.unlink(missing_ok=True)
+        except OSError:
+            # Preservar el error de validación original es más importante que
+            # reemplazarlo por un fallo secundario al limpiar el directorio.
+            pass
+        raise
+
+    return IngestResponse(
+        block=BlockSummary(
+            name=parsed.name,
+            filename=parsed.filename,
+            n_samples=parsed.n_samples,
+            n_variables=parsed.n_variables,
+            n_numeric_variables=parsed.n_numeric_variables,
+            columns=parsed.columns,
+            sample_id_column=parsed.sample_id_column,
+        ),
+        warnings=parsed.warnings,
+        preview=parsed.preview,
+    )
 
 
 @app.delete(

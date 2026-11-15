@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test as base, expect, type Page } from '@playwright/test';
 import { createIntl } from 'react-intl';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -35,6 +35,133 @@ function msg(
 /** Label accesible del grupo de temas: "Tema de colores · 5 disponibles". */
 const THEME_GROUP_LABEL = msg('theme.groupLabel', { count: 5 });
 
+type MockWindow = {
+  pyxAPI: PyxAPI;
+  __apiCalls?: ApiCallRecord[];
+  __fileTextCalled?: boolean;
+};
+
+type TestFixtures = {
+  /** Respuesta alternativa para la subida del mock canónico. */
+  uploadResponse: ApiResponse<unknown> | undefined;
+  /**
+   * Overrides del bloque devuelto por la subida del mock canónico.
+   * Permite simular un bloque categórico (tabla de metadata).
+   */
+  block: Partial<UploadResponse['block']> | undefined;
+};
+
+const test = base.extend<TestFixtures>({
+  uploadResponse: async ({}, use) => {
+    await use(undefined);
+  },
+  block: async ({}, use) => {
+    await use(undefined);
+  },
+});
+
+const SUMMARY_UPLOAD_RESPONSE: ApiResponse<UploadResponse> = {
+  ok: true,
+  status: 201,
+  data: {
+    block: {
+      name: 'Transcriptómica',
+      filename: 'demo.csv',
+      n_samples: 500,
+      n_variables: 20000,
+      n_numeric_variables: 20000,
+      columns: ['gene_1'],
+      sample_id_column: 'sample_id',
+    },
+    warnings: [],
+    preview: {
+      columns: ['sample_id', 'gene_1'],
+      rows: [['S1', '1.25']],
+    },
+  },
+};
+
+const NON_NUMERIC_WARNING_RESPONSE: ApiResponse<UploadResponse> = {
+  ok: true,
+  status: 201,
+  data: {
+    block: {
+      name: 'demo',
+      filename: 'demo.csv',
+      n_samples: 2,
+      n_variables: 2,
+      n_numeric_variables: 1,
+      columns: ['feature_1', 'metadata'],
+      sample_id_column: 'sample_id',
+    },
+    warnings: [
+      {
+        code: 'W_NON_NUMERIC_COLUMNS',
+        message_key: 'ingest.warnings.nonNumericColumns',
+        columns: ['metadata'],
+        detail: {},
+      },
+    ],
+    preview: { columns: ['sample_id'], rows: [['S1']] },
+  },
+};
+
+const UNKNOWN_BLOCK_ERROR_RESPONSE: ApiResponse<unknown> = {
+  ok: false,
+  status: 404,
+  data: {
+    error: {
+      code: 'E_UNKNOWN_BLOCK',
+      message_key: 'errors.unknownBlock',
+      detail: { file: 'nutrimouse_gene.csv' },
+    },
+  },
+};
+
+const FASTAPI_DETAIL_ERROR_RESPONSE: ApiResponse<unknown> = {
+  ok: false,
+  status: 500,
+  data: { detail: 'El archivo no existe.' },
+};
+
+const VALIDATION_ERROR_RESPONSE: ApiResponse<unknown> = {
+  ok: false,
+  status: 422,
+  data: {
+    detail: [
+      {
+        loc: ['body', 'filename'],
+        msg: 'field required',
+        type: 'value_error.missing',
+      },
+    ],
+  },
+};
+
+const UNKNOWN_WARNING_RESPONSE: ApiResponse<UploadResponse> = {
+  ok: true,
+  status: 201,
+  data: {
+    block: {
+      name: 'demo',
+      filename: 'demo.csv',
+      n_samples: 2,
+      n_variables: 1,
+      n_numeric_variables: 1,
+      columns: ['feature_1'],
+      sample_id_column: 'sample_id',
+    },
+    warnings: [
+      {
+        code: 'W_FUTURE_WARNING',
+        message_key: 'ingest.warnings.futureWarning',
+        detail: {},
+      },
+    ],
+    preview: { columns: ['sample_id'], rows: [['S1']] },
+  },
+};
+
 /**
  * Tests E2E de la POC del frontend.
  *
@@ -52,8 +179,8 @@ const THEME_GROUP_LABEL = msg('theme.groupLabel', { count: 5 });
  * navegación: el init script se aplica a los documentos que se carguen
  * después de instalarlo.
  */
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(installApiMock);
+test.beforeEach(async ({ page, uploadResponse, block }) => {
+  await page.addInitScript(installApiMock, { uploadResponse, block });
 });
 
 /**
@@ -73,6 +200,34 @@ async function uploadCsv(page: Page, name: string) {
     name,
     mimeType: 'text/csv',
     buffer: Buffer.from('s1,s2,s3\n1.0,2.0,3.0\n4.0,5.0,6.0\n'),
+  });
+}
+
+/**
+ * Mockea los 3 assets del dataset nutrimouse: los 2 bloques numéricos y la
+ * tabla de metadata (fenotipo).
+ */
+async function mockNutrimouseAssets(page: Page) {
+  await page.route('**/datasets/nutrimouse_gene.csv', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/csv',
+      body: 'g1,g2,g3\n1.0,2.0,3.0\n4.0,5.0,6.0\n',
+    });
+  });
+  await page.route('**/datasets/nutrimouse_lipid.csv', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/csv',
+      body: 'l1,l2\n0.1,0.2\n0.3,0.4\n',
+    });
+  });
+  await page.route('**/datasets/nutrimouse_meta.csv', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'text/csv',
+      body: 'sample,genotype,diet\n1,wt,lin\n2,wt,sun\n',
+    });
   });
 }
 
@@ -281,9 +436,9 @@ test.describe('Pythomics frontend — POC', () => {
     await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
     const dialog = page.getByRole('dialog', { name: es['datasets.title'] });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText('nutrimouse')).toBeVisible();
-    await expect(dialog.getByText('srbct')).toBeVisible();
-    await expect(dialog.getByText('breast.TCGA')).toBeVisible();
+    await expect(dialog.getByText('nutrimouse', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('srbct', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('breast.TCGA', { exact: true })).toBeVisible();
   });
 
   test('cargar srbct desde el modal lo agrega al FileList y cierra el modal', async ({
@@ -296,6 +451,14 @@ test.describe('Pythomics frontend — POC', () => {
         status: 200,
         contentType: 'text/csv',
         body: fakeCsv,
+      });
+    });
+    // El modal también trae la tabla de metadata (fenotipo) del dataset.
+    await page.route('**/datasets/srbct_meta.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'sample,class\nEWS.T1,EWS\nEWS.T2,EWS\n',
       });
     });
 
@@ -361,25 +524,11 @@ test.describe('Pythomics frontend — POC', () => {
     ).toBeVisible();
   });
 
-  test('cargar nutrimouse trae los 2 bloques (gene + lipid) en paralelo', async ({
+  test('cargar nutrimouse trae los 2 bloques (gene + lipid) y la tabla de metadata', async ({
     page,
   }) => {
     await gotoPipeline(page);
-    // Mockeamos los 2 fetches en paralelo
-    await page.route('**/datasets/nutrimouse_gene.csv', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/csv',
-        body: 'g1,g2,g3\n1.0,2.0,3.0\n4.0,5.0,6.0\n',
-      });
-    });
-    await page.route('**/datasets/nutrimouse_lipid.csv', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'text/csv',
-        body: 'l1,l2\n0.1,0.2\n0.3,0.4\n',
-      });
-    });
+    await mockNutrimouseAssets(page);
 
     await page
       .getByRole('button', { name: es['topbar.datasetsLabel'] })
@@ -388,16 +537,19 @@ test.describe('Pythomics frontend — POC', () => {
       .getByRole('button', { name: msg('datasets.loadLabel', { name: 'nutrimouse' }) })
       .click();
 
-    // Ambos archivos están en el FileList
+    // Los 3 archivos están en el FileList: los 2 bloques y el metadata.
     await expect(
       page.getByRole('listitem').filter({ hasText: 'nutrimouse_gene.csv' }),
     ).toBeVisible();
     await expect(
       page.getByRole('listitem').filter({ hasText: 'nutrimouse_lipid.csv' }),
     ).toBeVisible();
-    // El contador de archivos dice "2 archivos cargados"
     await expect(
-      page.getByText(msg('load.filesCount', { count: 2 })),
+      page.getByRole('listitem').filter({ hasText: 'nutrimouse_meta.csv' }),
+    ).toBeVisible();
+    // El contador de archivos dice "3 archivos cargados"
+    await expect(
+      page.getByText(msg('load.filesCount', { count: 3 })),
     ).toBeVisible();
   });
 
@@ -578,6 +730,290 @@ test.describe('Rutas contra el backend real', () => {
     expect(upload?.path).toBe('/v1/archivos/');
     // /v1/cargar/ ya no existe en el backend: no debe aparecer ninguna llamada.
     expect(calls.some((c) => c.path.startsWith('/v1/cargar/'))).toBe(false);
+  });
+
+  test.describe('resumen de ingesta del backend', () => {
+    test.use({ uploadResponse: SUMMARY_UPLOAD_RESPONSE });
+
+    test('la UI muestra el resumen devuelto por el backend', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      await expect(page.getByText('Transcriptómica')).toBeVisible();
+      await expect(
+        page.getByText(
+          msg('ingest.dimensions', { samples: 500, variables: 20000 }),
+        ),
+      ).toBeVisible();
+      await expect(
+        page.getByRole('columnheader', { name: 'gene_1' }),
+      ).toBeVisible();
+      await expect(page.getByRole('cell', { name: '1.25' })).toBeVisible();
+    });
+  });
+
+  /**
+   * Clasificación del bloque.
+   *
+   * El backend informa hechos (`n_numeric_variables` = cuántas columnas son
+   * numéricas por dtype), pero NO dice si el archivo es metadata: eso lo
+   * declara el origen del archivo (el `metaFile` del catálogo de datasets).
+   */
+  test.describe('clasificación del bloque ingestado', () => {
+    test('un bloque con todas sus variables numéricas muestra solo las dimensiones', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      // El mock por defecto devuelve un bloque 100% numérico.
+      await expect(
+        page.getByText(msg('ingest.dimensions', { samples: 2, variables: 1 })),
+      ).toBeVisible();
+      await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+      await expect(
+        page.getByText(msg('ingest.numericVariables', { count: 1 })),
+      ).toHaveCount(0);
+    });
+
+    test.describe('bloque mixto (numéricas + no numéricas)', () => {
+      test.use({
+        block: {
+          n_variables: 4,
+          n_numeric_variables: 3,
+          columns: ['f1', 'f2', 'f3', 'metadata'],
+        },
+      });
+
+      test('un bloque mixto muestra cuántas variables numéricas tiene', async ({
+        page,
+      }) => {
+        await gotoPipeline(page);
+        await uploadCsv(page, 'demo.csv');
+
+        await expect(
+          page.getByText(msg('ingest.numericVariables', { count: 3 })),
+        ).toBeVisible();
+        // No es la tabla de metadata: el rol no lo decide el dtype.
+        await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+      });
+    });
+
+    test.describe('bloque sin variables numéricas', () => {
+      test.use({
+        block: {
+          n_variables: 2,
+          n_numeric_variables: 0,
+          columns: ['categoria_1', 'categoria_2'],
+        },
+      });
+
+      test('el conteo de variables numéricas no lo convierte en tabla de metadata', async ({
+        page,
+      }) => {
+        await gotoPipeline(page);
+        await uploadCsv(page, 'demo.csv');
+
+        await expect(
+          page.getByText(msg('ingest.numericVariables', { count: 0 })),
+        ).toBeVisible();
+        // La etiqueta de metadata la decide el ROL del archivo, no el
+        // dtype de sus columnas.
+        await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+      });
+    });
+  });
+
+  test('el modal de ejemplos sube también el archivo de metadata', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await mockNutrimouseAssets(page);
+
+    await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
+    await page
+      .getByRole('button', { name: msg('datasets.loadLabel', { name: 'nutrimouse' }) })
+      .click();
+
+    // El modal se cierra: todo el lote entró bien.
+    await expect(
+      page.getByRole('dialog', { name: es['datasets.title'] }),
+    ).not.toBeVisible();
+
+    // Se subieron los 3 archivos: los 2 bloques y el metadata, al final.
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter((c) => c.path === '/v1/archivos/')
+            .length,
+      )
+      .toBe(3);
+
+    const uploads = (await readApiCalls(page)).filter(
+      (c) => c.path === '/v1/archivos/',
+    );
+    expect(uploads.map((u) => u.filename)).toEqual([
+      'nutrimouse_gene.csv',
+      'nutrimouse_lipid.csv',
+      'nutrimouse_meta.csv',
+    ]);
+
+    // Y el metadata queda en la lista de archivos del proyecto.
+    await expect(
+      page.getByRole('listitem').filter({ hasText: 'nutrimouse_meta.csv' }),
+    ).toBeVisible();
+  });
+
+  test('un archivo que falla no aborta el resto del lote', async ({ page }) => {
+    await gotoPipeline(page);
+    await page.route('**/datasets/nutrimouse_gene.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'g1,g2,g3\n1.0,2.0,3.0\n4.0,5.0,6.0\n',
+      });
+    });
+    await page.route('**/datasets/nutrimouse_lipid.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'l1,l2\n0.1,0.2\n0.3,0.4\n',
+      });
+    });
+    // La tabla de metadata falla: el resto del lote tiene que seguir.
+    await page.route('**/datasets/nutrimouse_meta.csv', async (route) => {
+      await route.fulfill({ status: 404, contentType: 'text/plain', body: '' });
+    });
+
+    await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
+    await page
+      .getByRole('button', { name: msg('datasets.loadLabel', { name: 'nutrimouse' }) })
+      .click();
+
+    // El modal sigue abierto y reporta el archivo que falló.
+    const dialog = page.getByRole('dialog', { name: es['datasets.title'] });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('alert')).toContainText('nutrimouse_meta.csv');
+
+    // Pero los 2 bloques que sí entraron quedan en el FileList.
+    const fileList = page.getByRole('list', { name: es['file.listLabel'] });
+    await expect(
+      fileList.getByRole('listitem').filter({ hasText: 'nutrimouse_gene.csv' }),
+    ).toBeVisible();
+    await expect(
+      fileList.getByRole('listitem').filter({ hasText: 'nutrimouse_lipid.csv' }),
+    ).toBeVisible();
+    await expect(
+      fileList.getByRole('listitem').filter({ hasText: 'nutrimouse_meta.csv' }),
+    ).toHaveCount(0);
+  });
+
+  test('solo la tabla de metadata del dataset de ejemplo se anuncia como metadata', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await mockNutrimouseAssets(page);
+
+    await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
+    await page
+      .getByRole('button', { name: msg('datasets.loadLabel', { name: 'nutrimouse' }) })
+      .click();
+
+    await expect(
+      page.getByRole('dialog', { name: es['datasets.title'] }),
+    ).not.toBeVisible();
+
+    // El rol lo declara el catálogo del dataset (su `metaFile`), no el dtype
+    // de las columnas: solo ese bloque lleva la etiqueta de metadata.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(1);
+  });
+
+  test.describe('warnings de ingesta', () => {
+    test.use({ uploadResponse: NON_NUMERIC_WARNING_RESPONSE });
+
+    test('un warning de ingesta se muestra traducido en español', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      const translated = msg('ingest.warnings.nonNumericColumns', {
+        columns: 'metadata',
+      });
+      await expect(page.getByText(translated)).toBeVisible();
+      await expect(
+        page.getByText('ingest.warnings.nonNumericColumns'),
+      ).toHaveCount(0);
+    });
+
+    test('un warning de ingesta se muestra traducido en inglés', async ({
+      page,
+    }) => {
+      await seedLocale(page, 'en');
+      await page.goto('/');
+      await page.getByRole('button', { name: en['home.cta'] }).click();
+      await uploadCsv(page, 'demo.csv');
+
+      const translated = msg(
+        'ingest.warnings.nonNumericColumns',
+        { columns: 'metadata' },
+        'en',
+      );
+      await expect(page.getByText(translated)).toBeVisible();
+      await expect(
+        page.getByText(
+          msg('ingest.warnings.nonNumericColumns', { columns: 'metadata' }),
+        ),
+      ).toHaveCount(0);
+    });
+  });
+
+  test.describe('warning de ingesta desconocido', () => {
+    test.use({ uploadResponse: UNKNOWN_WARNING_RESPONSE });
+
+    test('un message_key desconocido muestra un texto genérico', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      await expect(page.getByText(msg('ingest.warningGeneric'))).toBeVisible();
+      await expect(
+        page.getByText('ingest.warnings.futureWarning'),
+      ).toHaveCount(0);
+    });
+  });
+
+  test('la subida recibe una ruta y no el contenido del archivo', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter((c) => c.filename === 'demo.csv')
+            .length,
+      )
+      .toBe(1);
+
+    const upload = (await readApiCalls(page)).find(
+      (c) => c.filename === 'demo.csv',
+    );
+    expect(
+      await page.evaluate(() => typeof window.pyxAPI.getPathForFile),
+    ).toBe('function');
+    expect(upload?.sourcePath).toBe('/tmp/pythomics-mock/demo.csv');
+    expect(upload?.content).toBeUndefined();
+    expect(
+      await page.evaluate(
+        () => (window as unknown as MockWindow).__fileTextCalled,
+      ),
+    ).toBe(false);
   });
 
   test('el borrado de un archivo usa el query param nombre_archivo', async ({ page }) => {
@@ -1050,12 +1486,26 @@ test.describe('Anti-FOUC de idioma, título y splash', () => {
       page,
     }) => {
       await seedLocale(page, locale);
+      // El splash se elimina 300 ms después del primer paint. Se captura el
+      // pseudo-elemento en el instante en que aparece para no depender de
+      // esa carrera al consultar el DOM más tarde.
+      await page.addInitScript(() => {
+        const w = window as unknown as { __splashTagline?: string | null };
+        const observer = new MutationObserver(() => {
+          const el = document.querySelector('#splash .tagline');
+          if (!el) return;
+          w.__splashTagline = getComputedStyle(el, '::before').content;
+          observer.disconnect();
+        });
+        observer.observe(document, { childList: true, subtree: true });
+      });
       await page.goto('/', { waitUntil: 'domcontentloaded' });
 
-      const tagline = await page.evaluate(() => {
-        const el = document.querySelector('#splash .tagline');
-        return el ? getComputedStyle(el, '::before').content : null;
-      });
+      const tagline = await page.evaluate(
+        () =>
+          (window as unknown as { __splashTagline?: string | null })
+            .__splashTagline ?? null,
+      );
       const expectedTagline =
         locale === 'en'
           ? en['app.splashTagline']
@@ -1103,59 +1553,21 @@ test.describe('Anti-FOUC de idioma, título y splash', () => {
  * desincroniza apenas cambia el copy.
  */
 
-/**
- * Mock del preload que devuelve un error del backend.
- *
- * Se registra DESPUÉS del mock por defecto (`installApiMock`, que corre en
- * el `beforeEach` de archivo), así que lo reemplaza: solo cambia la
- * respuesta de la subida; el resto de la API sigue siendo la de siempre.
- */
-function installErrorApiMock(response: {
-  status: number;
-  body: unknown;
-}) {
-  const w = window as unknown as {
-    pyxAPI: PyxAPI;
-    __apiCalls?: ApiCallRecord[];
-  };
-  const original = w.pyxAPI;
-  w.pyxAPI = {
-    ...original,
-    api: {
-      ...original.api,
-      upload: (path: string, filename: string) => {
-        (w.__apiCalls ??= []).push({ method: 'POST', path, filename });
-        return Promise.resolve({
-          ok: false,
-          status: response.status,
-          data: response.body,
-        }) as unknown as Promise<ApiResponse<UploadResponse>>;
-      },
-    },
-  };
-}
-
 test.describe('Errores del backend', () => {
+  test.use({ uploadResponse: UNKNOWN_BLOCK_ERROR_RESPONSE });
+
   test('el sobre de error del backend se muestra traducido en la UI', async ({
     page,
   }) => {
-    await page.addInitScript(installErrorApiMock, {
-      status: 404,
-      body: {
-        error: {
-          code: 'E_UNKNOWN_BLOCK',
-          message_key: 'errors.unknownBlock',
-          detail: { file: 'nutrimouse_gene.csv' },
-        },
-      },
-    });
     await page.goto('/');
     await gotoPipeline(page);
     await uploadCsv(page, 'demo.csv');
 
     // El mensaje sale del catálogo, interpolando el `detail` del backend.
     await expect(
-      page.getByText(msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' })),
+      page.getByText(
+        msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' }),
+      ),
     ).toBeVisible();
     // Y no queda en blanco ni muestra la clave cruda.
     await expect(page.getByText('errors.unknownBlock')).toHaveCount(0);
@@ -1165,16 +1577,6 @@ test.describe('Errores del backend', () => {
     page,
   }) => {
     await seedLocale(page, 'en');
-    await page.addInitScript(installErrorApiMock, {
-      status: 404,
-      body: {
-        error: {
-          code: 'E_UNKNOWN_BLOCK',
-          message_key: 'errors.unknownBlock',
-          detail: { file: 'nutrimouse_gene.csv' },
-        },
-      },
-    });
     await page.goto('/');
     await page.getByRole('button', { name: en['home.cta'] }).click();
     await uploadCsv(page, 'demo.csv');
@@ -1187,44 +1589,34 @@ test.describe('Errores del backend', () => {
     ).toBeVisible();
     // Y el de es.json no aparece por ninguna parte.
     await expect(
-      page.getByText(msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' })),
+      page.getByText(
+        msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' }),
+      ),
     ).toHaveCount(0);
   });
 
-  test('el fallback de FastAPI (detail string) sigue mostrando el texto', async ({
-    page,
-  }) => {
-    await page.addInitScript(installErrorApiMock, {
-      status: 500,
-      body: { detail: 'El archivo no existe.' },
-    });
-    await page.goto('/');
-    await gotoPipeline(page);
-    await uploadCsv(page, 'demo.csv');
+  test.describe('fallback de FastAPI', () => {
+    test.use({ uploadResponse: FASTAPI_DETAIL_ERROR_RESPONSE });
 
-    await expect(page.getByText('El archivo no existe.')).toBeVisible();
+    test('el detail string sigue mostrando el texto', async ({ page }) => {
+      await page.goto('/');
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      await expect(page.getByText('El archivo no existe.')).toBeVisible();
+    });
   });
 
-  test('el fallback de validación 422 (detail lista) sigue mostrando el texto', async ({
-    page,
-  }) => {
-    await page.addInitScript(installErrorApiMock, {
-      status: 422,
-      body: {
-        detail: [
-          {
-            loc: ['body', 'filename'],
-            msg: 'field required',
-            type: 'value_error.missing',
-          },
-        ],
-      },
-    });
-    await page.goto('/');
-    await gotoPipeline(page);
-    await uploadCsv(page, 'demo.csv');
+  test.describe('fallback de validación 422', () => {
+    test.use({ uploadResponse: VALIDATION_ERROR_RESPONSE });
 
-    await expect(page.getByText('field required')).toBeVisible();
+    test('la lista de detail sigue mostrando el texto', async ({ page }) => {
+      await page.goto('/');
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      await expect(page.getByText('field required')).toBeVisible();
+    });
   });
 });
 

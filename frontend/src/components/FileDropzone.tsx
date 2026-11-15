@@ -6,13 +6,20 @@ import {
   type ReactNode,
 } from 'react';
 import { useIntl } from 'react-intl';
-import type { UploadedFile, PreviewData } from '../lib/project-state';
 import { useTranslate } from '../i18n';
 import type { MessageKey } from '../i18n/messages';
 import { FileIcon } from './icons';
 
+export type SelectedFile = {
+  filename: string;
+  size: number;
+  uploadedAt: number;
+  /** Ruta local resuelta por Electron; el renderer no lee el archivo. */
+  path: string;
+};
+
 type Props = {
-  onFileAdded: (file: UploadedFile & { preview: PreviewData }) => void;
+  onFileAdded: (file: SelectedFile) => void | Promise<void>;
 };
 
 const ACCEPTED_EXT = ['.csv', '.tsv'] as const;
@@ -23,21 +30,10 @@ const ACCEPTED_EXT = ['.csv', '.tsv'] as const;
  */
 type Chunks = (chunks: string[]) => ReactNode;
 
-/**
- * Parsea las primeras N líneas del texto como preview.
- * Maneja separador CSV (,) o TSV (\t).
- */
-function parsePreview(text: string, sep: string): PreviewData {
-  const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
-  const sample = lines.slice(0, 6).map((line) => line.split(sep));
-  const cols = sample[0]?.length ?? 0;
-  return { rows: lines.length, cols, sample };
-}
-
 export function FileDropzone({ onFileAdded }: Props) {
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reading, setReading] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const t = useTranslate();
   const intl = useIntl();
 
@@ -60,7 +56,7 @@ export function FileDropzone({ onFileAdded }: Props) {
     async (files: FileList | null) => {
       if (!files || files.length === 0) return;
       setError(null);
-      setReading(true);
+      setUploading(true);
 
       try {
         for (const file of Array.from(files)) {
@@ -73,25 +69,28 @@ export function FileDropzone({ onFileAdded }: Props) {
             continue;
           }
 
-          const sep = ext === '.tsv' ? '\t' : ',';
-          const text = await file.text();
-          const preview = parsePreview(text, sep);
-
-          if (preview.rows === 0) {
+          if (file.size === 0) {
             setError(t('file.emptyFile', { filename: file.name }));
             continue;
           }
 
-          onFileAdded({
+          // Solo se resuelve la ruta. El archivo se lee en el proceso
+          // Electron, nunca como texto dentro del renderer.
+          const path = window.pyxAPI.getPathForFile(file);
+          if (!path) {
+            setError(t('file.pathUnavailable', { filename: file.name }));
+            continue;
+          }
+
+          await onFileAdded({
             filename: file.name,
             size: file.size,
             uploadedAt: Date.now(),
-            preview,
-            content: text,
+            path,
           });
         }
       } finally {
-        setReading(false);
+        setUploading(false);
       }
     },
     [onFileAdded, t],
@@ -145,7 +144,7 @@ export function FileDropzone({ onFileAdded }: Props) {
           {rich('file.dropTitle', { code })}
         </p>
         <p id="file-help" className="text-sm text-slate-500 mt-1">
-          {reading ? t('file.reading') : t('file.dropHelp')}
+          {uploading ? t('file.uploading') : t('file.dropHelp')}
         </p>
       </label>
 

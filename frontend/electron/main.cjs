@@ -15,6 +15,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('e
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
+const { openAsBlob } = require('node:fs');
 const { BackendManager } = require('./backend.cjs');
 
 const isDev = process.env.PYTHOMICS_DEV === '1';
@@ -329,10 +330,13 @@ function setupIpc() {
   // Va aparte de `api:request` porque esa ruta siempre manda
   // Content-Type: application/json.
   ipcMain.handle('api:upload', async (_event, payload) => {
-    const apiPath = (payload && payload.path) || '/';
+    const filePath = (payload && payload.path) || '';
     const filename = (payload && payload.filename) || '';
-    const content = (payload && payload.content) || '';
+    const content =
+      payload && typeof payload.content === 'string' ? payload.content : '';
 
+    // El canal de subida tiene un único destino: la ingesta de archivos.
+    const apiPath = '/v1/archivos/';
     const url = `http://127.0.0.1:${BACKEND_PORT}${apiPath}`;
     try {
       const form = new FormData();
@@ -342,11 +346,23 @@ function setupIpc() {
       const mime = filename.toLowerCase().endsWith('.tsv')
         ? 'text/tab-separated-values'
         : 'text/csv';
-      form.append('file', new Blob([content], { type: mime }), filename);
+
+      // `openAsBlob` devuelve un Blob backed por el archivo: fetch arma el
+      // cuerpo multipart leyéndolo del disco, sin copiarlo entero al heap.
+      // Si no hay ruta (assets estáticos), se conserva el fallback de
+      // contenido que enviaba el renderer.
+      const blob = filePath
+        ? await openAsBlob(filePath, { type: mime })
+        : new Blob([content], { type: mime });
+      form.append('file', blob, filename);
       // OJO: NO setear Content-Type a mano. fetch lo arma con el boundary
       // correcto; si se define a mano, el boundary queda mal y FastAPI
       // rechaza el archivo.
-      const res = await fetch(url, { method: 'POST', body: form, headers: { 'X-Pythomics-Token': API_TOKEN } });
+      const res = await fetch(url, {
+        method: 'POST',
+        body: form,
+        headers: { 'X-Pythomics-Token': API_TOKEN },
+      });
       const contentType = res.headers.get('content-type') || '';
       const data = contentType.includes('application/json')
         ? await res.json().catch(() => null)

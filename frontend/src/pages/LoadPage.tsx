@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useIntl, type PrimitiveType } from 'react-intl';
-import { FileDropzone } from '../components/FileDropzone';
+import { FileDropzone, type SelectedFile } from '../components/FileDropzone';
 import { FileList } from '../components/FileList';
 import {
   api,
@@ -8,7 +8,8 @@ import {
   type ApiErrorPayload,
   type ApiResponse,
 } from '../lib/api';
-import { useProject, type UploadedFile, type PreviewData } from '../lib/project-state';
+import { useProject } from '../lib/project-state';
+import type { IngestWarning } from '../lib/types';
 import { useTranslate } from '../i18n';
 import esCatalog from '../i18n/es.json';
 import type { MessageKey } from '../i18n/messages';
@@ -16,8 +17,6 @@ import type { MessageKey } from '../i18n/messages';
 type Props = {
   onNext: () => void;
 };
-
-type FileWithPreview = UploadedFile & { preview: PreviewData };
 
 /**
  * Función de fragmento de react-intl: recibe las partes del mensaje que
@@ -94,6 +93,48 @@ const CATALOG_IN_SYNC: UnmappedCatalogErrorKey extends never ? true : never =
  * solo se resuelve una clave que exista de verdad en el catálogo.
  */
 const CATALOG_KEYS: ReadonlySet<string> = new Set(Object.keys(esCatalog));
+
+/**
+ * Claves de warning de ingesta que la UI conoce.
+ *
+ * El backend puede agregar códigos nuevos. Para no mostrar una clave cruda,
+ * una clave desconocida cae en el mensaje genérico aunque esté en el
+ * catálogo.
+ */
+const SUPPORTED_INGEST_WARNING_KEYS: ReadonlySet<string> = new Set([
+  'ingest.warnings.nonNumericColumns',
+  'ingest.warnings.encodingRepaired',
+]);
+
+/**
+ * Resuelve el `message_key` de un warning contra el catálogo.
+ *
+ * Devuelve null si la clave no existe o si el renderer todavía no conoce ese
+ * tipo de warning; en ambos casos la UI muestra un texto genérico.
+ */
+function resolveWarningMessageKey(messageKey: string): MessageKey | null {
+  if (
+    !CATALOG_KEYS.has(messageKey) ||
+    !SUPPORTED_INGEST_WARNING_KEYS.has(messageKey)
+  ) {
+    return null;
+  }
+  return messageKey as MessageKey;
+}
+
+/** Traduce un warning de ingesta sin exponer nunca su clave cruda. */
+function translateWarning(
+  t: Translate,
+  warning: IngestWarning,
+): string {
+  const key = resolveWarningMessageKey(warning.message_key);
+  if (!key) return t('ingest.warningGeneric');
+
+  const text = t(key, {
+    columns: warning.columns?.join(', ') ?? '',
+  });
+  return text === key ? t('ingest.warningGeneric') : text;
+}
 
 /**
  * Extrae el `detail` de FastAPI: un string o la lista de errores de
@@ -233,21 +274,33 @@ export function LoadPage({ onNext }: Props) {
     <code className="font-mono text-pharma-700">{chunks}</code>
   );
 
-  const handleFileAdded = async (file: FileWithPreview) => {
-    addFile(file);
-    setModelConfig({ filename: file.filename });
-
-    // Subida real: POST /v1/archivos/ con multipart/form-data.
+  const handleFileAdded = async (file: SelectedFile) => {
+    // El renderer solo aporta la ruta. El proceso Electron lee el archivo
+    // del disco y el backend devuelve el resumen de ingesta.
     try {
-      const res = await api.uploadFile(file.filename, file.content ?? '');
+      const res = await api.uploadFile(file.path, file.filename);
 
-      if (res.ok) {
-        const mensaje = res.data?.mensaje?.trim();
+      if (res.ok && res.data) {
+        const summary = res.data;
+        addFile({
+          filename: summary.block.filename || file.filename,
+          size: file.size,
+          uploadedAt: file.uploadedAt,
+          path: file.path,
+          preview: summary.preview,
+          block: summary.block,
+          warnings: summary.warnings,
+          // Un archivo que sube el usuario es una matriz de variables: el
+          // rol de metadata solo se conoce cuando el archivo viene del
+          // catálogo de datasets de ejemplo (que declara su `metaFile`).
+          role: 'block',
+        });
+        setModelConfig({ filename: summary.block.filename });
         setStatus({
           kind: 'info',
-          text: mensaje
-            ? mensaje
-            : t('load.uploadOk', { filename: file.filename }),
+          text: t('load.uploadOk', {
+            filename: summary.block.filename || file.filename,
+          }),
         });
       } else {
         const detalle = buildErrorMessage(res, t, { filename: file.filename });
@@ -348,6 +401,72 @@ export function LoadPage({ onNext }: Props) {
       )}
 
       <FileList files={state.files} onRemove={handleRemove} />
+
+      {state.files.map(
+        (file) =>
+          file.block && (
+            <section
+              key={file.filename}
+              className="card p-4 space-y-3"
+              aria-label={t('ingest.summaryTitle')}
+            >
+              <div>
+                <h3 className="font-semibold text-pharma-700">
+                  {file.block.name}
+                </h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  {t('ingest.dimensions', {
+                    samples: file.block.n_samples,
+                    variables: file.block.n_variables,
+                  })}
+                </p>
+                {/*
+                  Clasificación del bloque:
+                    - el rol lo declara el origen del archivo (`role`): la
+                      tabla de metadata (fenotipo) se anuncia como tal;
+                    - `n_numeric_variables < n_variables` informa cuántas
+                      columnas son numéricas por dtype (el backend además
+                      avisa por su cuenta con un warning).
+                */}
+                {file.role === 'metadata' && (
+                  <p className="text-sm text-slate-600 mt-1">
+                    {t('ingest.metadataBlock')}
+                  </p>
+                )}
+                {file.block.n_numeric_variables < file.block.n_variables && (
+                  <p className="text-sm text-slate-600 mt-1">
+                    {t('ingest.numericVariables', {
+                      count: file.block.n_numeric_variables,
+                    })}
+                  </p>
+                )}
+                <p className="text-xs text-slate-500 mt-1">
+                  {t('ingest.sampleIdColumn', {
+                    column: file.block.sample_id_column,
+                  })}
+                </p>
+              </div>
+
+              {file.warnings && file.warnings.length > 0 && (
+                <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                  <h4 className="text-sm font-medium text-amber-900">
+                    {t('ingest.warningsTitle')}
+                  </h4>
+                  <ul className="list-disc pl-5 mt-1 space-y-1">
+                    {file.warnings.map((warning, index) => (
+                      <li
+                        key={`${warning.code}-${index}`}
+                        className="text-sm text-amber-900"
+                      >
+                        {translateWarning(t, warning)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          ),
+      )}
 
       <footer className="flex justify-end pt-2">
         <button

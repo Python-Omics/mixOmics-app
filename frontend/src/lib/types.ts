@@ -104,10 +104,60 @@ export type FilesResponse = {
   ruta: string;
 };
 
-/** Response de POST /v1/archivos/ (subida multipart de un CSV). */
+/** Advertencia no bloqueante emitida durante la ingesta de un bloque. */
+export type IngestWarning = {
+  code: string;
+  message_key: string;
+  columns?: string[];
+  detail?: Record<string, unknown>;
+};
+
+/**
+ * Response de POST /v1/archivos/ (subida multipart de un CSV/TSV).
+ *
+ * El backend describe el bloque ingerido con hechos, no con juicios: no
+ * dice "esto es metadata", dice cuántas columnas son numéricas por dtype y
+ * cuáles son las columnas de variables. El ROL del bloque (matriz del modelo
+ * vs. tabla de fenotipo) lo determina el origen del archivo en el renderer
+ * (ver `FileRole` en `lib/project-state.tsx`).
+ */
 export type UploadResponse = {
-  mensaje: string;
-  nombre: string;
+  block: {
+    /** Nombre del bloque (nombre del archivo sin extensión). */
+    name: string;
+    /** Nombre del archivo ingerido en el backend. */
+    filename: string;
+    /** Cantidad de muestras (filas) del bloque. */
+    n_samples: number;
+    /**
+     * Cantidad TOTAL de variables del bloque: todas las columnas de
+     * variables (sin la del ID de muestra), numéricas **y** no numéricas.
+     *
+     * Antes contaba solo las numéricas; ahora es el total, y el detalle
+     * numérico vive en `n_numeric_variables`.
+     */
+    n_variables: number;
+    /**
+     * Cantidad de columnas que son numéricas POR DTYPE.
+     *
+     * Ojo: los fenotipos de mixOmics vienen codificados como enteros
+     * (`genotype` 1/2, `diet` 1/3/5), así que un archivo de metadata puede
+     * tener todas sus columnas numéricas. Este número NO dice cuántas
+     * features tiene el bloque ni si es metadata.
+     */
+    n_numeric_variables: number;
+    /**
+     * Nombres de todas las columnas de variables del bloque (sin la del ID
+     * de muestra). El backend las topa a 100.
+     *
+     * Es la lista de candidatas a columna de clase.
+     */
+    columns: string[];
+    /** Columna que contiene los IDs de muestra. */
+    sample_id_column: string;
+  };
+  warnings: IngestWarning[];
+  preview: { columns: string[]; rows: string[][] };
 };
 
 /** Response de DELETE /v1/archivos/?nombre_archivo=... */
@@ -124,11 +174,20 @@ export type ApiCallRecord = {
   path: string;
   body?: unknown;
   filename?: string;
+  /** Ruta local entregada al canal de subida. */
+  sourcePath?: string;
+  /** Contenido opcional del fallback para assets sin ruta local. */
+  content?: string;
 };
 
 export interface PyxAPI {
   getBackendStatus(): Promise<BackendStatus>;
   restartBackend(): Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Obtiene la ruta de un archivo elegido o arrastrado por el usuario.
+   * `webUtils.getPathForFile` es la API soportada desde Electron 32.
+   */
+  getPathForFile(file: File): string;
 
   api: {
     request<T = unknown>(
@@ -139,11 +198,16 @@ export interface PyxAPI {
     get<T = unknown>(path: string): Promise<ApiResponse<T>>;
     post<T = unknown>(path: string, body?: unknown): Promise<ApiResponse<T>>;
     delete<T = unknown>(path: string): Promise<ApiResponse<T>>;
-    /** Sube un archivo como multipart/form-data (campo `file`). */
+    /**
+     * Sube un archivo como multipart/form-data (campo `file`).
+     *
+     * `path` es la ruta local en disco. `content` queda como fallback para
+     * assets estáticos que no tienen una ruta que Electron pueda abrir.
+     */
     upload(
       path: string,
       filename: string,
-      content: string,
+      content?: string,
     ): Promise<ApiResponse<UploadResponse>>;
   };
 

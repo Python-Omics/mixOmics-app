@@ -94,6 +94,16 @@
   "load.removeUnreachable": "{filename} was removed from the list, but the backend could not be reached: {detail}",
   "load.next": "Next →",
 
+  "ingest.summaryTitle": "Ingestion summary",
+  "ingest.dimensions": "{samples} samples × {variables} variables",
+  "ingest.sampleIdColumn": "Sample ID column: {column}",
+  "ingest.metadataBlock": "Study metadata table",
+  "ingest.numericVariables": "{count} numeric variables",
+  "ingest.warningsTitle": "Upload warnings",
+  "ingest.warningGeneric": "The backend reported a warning during file ingestion.",
+  "ingest.warnings.nonNumericColumns": "Non-numeric columns were detected and excluded: {columns}.",
+  "ingest.warnings.encodingRepaired": "The file encoding was repaired.",
+
   "errors.fileExtension": "Only .csv or .tsv files are accepted.",
   "errors.emptyFile": "The file {file} is empty.",
   "errors.notNumeric": "The file {file} contains non-numeric values.",
@@ -137,7 +147,8 @@
   "file.dropLabel": "Drag CSV or TSV files, or click to choose them",
   "file.dropTitle": "Drag your <code>.csv</code> or <code>.tsv</code> files",
   "file.dropHelp": "or click to choose them from your computer",
-  "file.reading": "Reading…",
+  "file.uploading": "Uploading to the backend…",
+  "file.pathUnavailable": "Could not obtain the path for \"{filename}\".",
   "file.unsupportedFormat": "Unsupported format: \"{filename}\". Only .csv or .tsv are accepted.",
   "file.emptyFile": "\"{filename}\" is empty.",
 

@@ -80,19 +80,20 @@ export const api = {
     withApiError(await window.pyxAPI.api.get<FilesResponse>('/v1/archivos/')),
 
   /**
-   * Sube un CSV al backend.
+   * Sube un CSV/TSV al backend.
    *
    * El backend espera multipart/form-data con el campo `file`, así que la
-   * subida viaja por el canal `api:upload` del puente IPC (no por `api:request`).
-   * `content` es el texto UTF-8 del CSV.
+   * subida viaja por el canal `api:upload` del puente IPC (no por
+   * `api:request`). Para archivos del usuario, `path` es la ruta local y el
+   * proceso Electron arma el cuerpo multipart leyendo el archivo del disco.
+   * `content` queda como fallback para assets estáticos sin ruta local.
    */
   uploadFile: async (
+    path: string,
     filename: string,
-    content: string,
+    content?: string,
   ): Promise<ApiResponse<UploadResponse>> =>
-    withApiError(
-      await window.pyxAPI.api.upload('/v1/archivos/', filename, content),
-    ),
+    withApiError(await window.pyxAPI.api.upload(path, filename, content)),
 
   /** Borra un archivo por nombre (NO por path): va como query param */
   deleteFile: async (filename: string) =>

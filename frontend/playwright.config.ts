@@ -1,11 +1,17 @@
 import { defineConfig } from '@playwright/test';
-import type { ApiCallRecord } from './src/lib/types';
+import type {
+  ApiCallRecord,
+  ApiResponse,
+  PyxAPI,
+  UploadResponse,
+} from './src/lib/types';
 
 /**
  * Mock del preload de Electron para los tests E2E en browser.
  *
- * `window.pyxAPI` queda disponible con respuestas que reflejan que el
- * backend no está corriendo, y cada llamada queda registrada en
+ * `window.pyxAPI` queda disponible con respuestas deterministas: la subida
+ * devuelve un resumen de ingesta exitoso y el resto de endpoints
+ * simula que no hay backend. Cada llamada queda registrada en
  * `window.__apiCalls` para que los tests puedan verificar contra qué rutas
  * pega el frontend.
  *
@@ -14,7 +20,26 @@ import type { ApiCallRecord } from './src/lib/types';
  * función se exporta y se inyecta por página con `page.addInitScript(...)`
  * desde el `beforeEach` del spec.
  */
-export function installApiMock() {
+export type InstallApiMockOptions = {
+  /** Respuesta alternativa para la subida, usada por tests de error/warning. */
+  uploadResponse?: ApiResponse<unknown>;
+  /**
+   * Overrides del resumen del bloque en la respuesta por defecto de la
+   * subida.
+   *
+   * Permite simular un bloque con columnas no numéricas (por ejemplo
+   * `{ n_variables: 4, n_numeric_variables: 3, columns: [...] }`) sin
+   * duplicar el mock.
+   */
+  block?: Partial<UploadResponse['block']>;
+};
+
+export function installApiMock(options: InstallApiMockOptions = {}) {
+  const w = window as unknown as {
+    pyxAPI: PyxAPI;
+    __apiCalls?: ApiCallRecord[];
+    __fileTextCalled?: boolean;
+  };
   const mockStatus = {
     running: false,
     port: 8501,
@@ -23,16 +48,22 @@ export function installApiMock() {
   };
   // Registro de llamadas al backend (lo consultan los tests).
   const calls: ApiCallRecord[] = [];
-  // @ts-expect-error - mock injected for tests
-  window.__apiCalls = calls;
+  w.__apiCalls = calls;
+  w.__fileTextCalled = false;
+
+  const originalText = File.prototype.text;
+  File.prototype.text = function () {
+    w.__fileTextCalled = true;
+    return originalText.call(this);
+  };
 
   const sinBackend = () =>
     Promise.resolve({ ok: false, status: 0, error: 'no backend in test' });
 
-  // @ts-expect-error - mock injected for tests
-  window.pyxAPI = {
+  w.pyxAPI = {
     getBackendStatus: () => Promise.resolve(mockStatus),
     restartBackend: () => Promise.resolve({ ok: false, error: 'mock' }),
+    getPathForFile: (file: File) => `/tmp/pythomics-mock/${file.name}`,
     api: {
       request: (method: string, path: string, body?: unknown) => {
         calls.push({ method, path, body });
@@ -51,9 +82,46 @@ export function installApiMock() {
         return sinBackend();
       },
       // Subida multipart: el backend espera el campo `file`.
-      upload: (path: string, filename: string) => {
-        calls.push({ method: 'POST', path, filename });
-        return sinBackend();
+      upload: (sourcePath: string, filename: string, content?: string) => {
+        calls.push({
+          method: 'POST',
+          path: '/v1/archivos/',
+          filename,
+          sourcePath,
+          content,
+        });
+        if (options.uploadResponse) {
+          return Promise.resolve(
+            options.uploadResponse,
+          ) as Promise<ApiResponse<UploadResponse>>;
+        }
+        // El bloque por defecto tiene una sola variable, numérica. Los tests
+        // pueden reconfigurarlo (por ejemplo, con columnas no numéricas).
+        const overrides = options.block ?? {};
+        const block: UploadResponse['block'] = {
+          name: overrides.name ?? filename,
+          filename: overrides.filename ?? filename,
+          n_samples: overrides.n_samples ?? 2,
+          n_variables: overrides.n_variables ?? 1,
+          n_numeric_variables: overrides.n_numeric_variables ?? 1,
+          columns: overrides.columns ?? ['feature_1'],
+          sample_id_column: overrides.sample_id_column ?? 'sample_id',
+        };
+        return Promise.resolve({
+          ok: true,
+          status: 201,
+          data: {
+            block,
+            warnings: [],
+            preview: {
+              columns: ['sample_id', 'feature_1'],
+              rows: [
+                ['S1', '1.0'],
+                ['S2', '2.0'],
+              ],
+            },
+          } satisfies UploadResponse,
+        });
       },
     },
     onBackendLog: () => () => {},

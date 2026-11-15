@@ -94,6 +94,16 @@
   "load.removeUnreachable": "Se quitó {filename} de la lista, pero no se pudo contactar el backend: {detail}",
   "load.next": "Siguiente →",
 
+  "ingest.summaryTitle": "Resumen de ingesta",
+  "ingest.dimensions": "{samples} muestras × {variables} variables",
+  "ingest.sampleIdColumn": "Columna de ID de muestra: {column}",
+  "ingest.metadataBlock": "Tabla de metadata del estudio",
+  "ingest.numericVariables": "{count} variables numéricas",
+  "ingest.warningsTitle": "Advertencias de la carga",
+  "ingest.warningGeneric": "El backend informó una advertencia durante la carga.",
+  "ingest.warnings.nonNumericColumns": "Se detectaron columnas no numéricas y se excluyeron: {columns}.",
+  "ingest.warnings.encodingRepaired": "Se corrigió la codificación del archivo.",
+
   "errors.fileExtension": "Solo se aceptan archivos .csv o .tsv.",
   "errors.emptyFile": "El archivo {file} está vacío.",
   "errors.notNumeric": "El archivo {file} tiene valores que no son numéricos.",
@@ -137,7 +147,8 @@
   "file.dropLabel": "Arrastra archivos CSV o TSV, o haz clic para elegirlos",
   "file.dropTitle": "Arrastra tus archivos <code>.csv</code> o <code>.tsv</code>",
   "file.dropHelp": "o haz clic para elegirlos desde tu equipo",
-  "file.reading": "Leyendo…",
+  "file.uploading": "Subiendo al backend…",
+  "file.pathUnavailable": "No se pudo obtener la ruta de \"{filename}\".",
   "file.unsupportedFormat": "Formato no soportado: \"{filename}\". Solo se aceptan .csv o .tsv.",
   "file.emptyFile": "\"{filename}\" está vacío.",
 
