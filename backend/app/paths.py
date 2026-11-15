@@ -29,6 +29,9 @@ DATA_DIR_ENV = "PYTHOMICS_DATA_DIR"
 #: Nombre del subdirectorio de datos dentro del perfil del usuario.
 DATA_SUBDIR = "data"
 
+#: Nombre del subdirectorio de recetas dentro del directorio de datos.
+DATASETS_SUBDIR = "datasets"
+
 
 def _is_frozen() -> bool:
     """True si el proceso corre desde un bundle de PyInstaller."""
@@ -59,12 +62,26 @@ def resolve_data_dir() -> Path:
         return fallback
 
 
-def resolve_jobs_dir() -> Path:
+def resolve_jobs_dir(data_dir: Path | None = None) -> Path:
     """Directorio donde viven los jobs (spec, progreso, resultado, figuras).
 
     Vive dentro del directorio de datos, así que en producción también está
-    en el perfil del usuario.
+    en el perfil del usuario. ``data_dir`` permite que las pruebas usen un
+    directorio temporal sin cambiar la variable de entorno del proceso.
     """
-    jobs = resolve_data_dir() / "jobs"
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    jobs = base / "jobs"
     jobs.mkdir(parents=True, exist_ok=True)
     return jobs
+
+
+def resolve_datasets_dir() -> Path:
+    """Directorio donde viven las recetas de datos.
+
+    Es hijo del directorio de datos: en producción también queda dentro del
+    perfil del usuario, y las recetas nunca se mezclan con los archivos que
+    sube el usuario.
+    """
+    datasets = resolve_data_dir() / DATASETS_SUBDIR
+    datasets.mkdir(parents=True, exist_ok=True)
+    return datasets

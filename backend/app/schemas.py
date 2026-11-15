@@ -389,12 +389,23 @@ class DeleteResponse(BaseModel):
 
 
 class BlockRef(BaseModel):
-    """Referencia interna a un bloque de datos: nombre, ruta, forma e IDs.
+    """Referencia interna a un bloque de datos dentro de la receta.
 
-    Este modelo representa el bloque **dentro de la receta** de análisis y no
-    transporta la clasificación de sus columnas. El resumen que vuelve al
-    renderer tras la ingesta usa :class:`BlockSummary` y no transporta la
-    lista de IDs.
+    La receta es **autosuficiente**: el worker no necesita reinterpretar el
+    archivo para saber qué columnas son numéricas y cuáles categóricas.
+
+    La clasificación se guarda **por excepciones**: se listan las columnas
+    categóricas y el resto se deduce de ``n_variables`` y
+    ``n_numeric_variables``. Un bloque de 2308 variables numéricas no
+    arrastra 2308 nombres en cada receta.
+
+    ``role`` declara si el bloque aporta variables al modelo (``block``) o
+    es una tabla de anotaciones (``metadata``). Lo declara el origen del
+    archivo, no el dtype: con la codificación entera de mixOmics una tabla
+    de phenotypes también tiene columnas numéricas.
+
+    El resumen que vuelve al renderer tras la ingesta usa
+    :class:`BlockSummary` y no transporta la lista de IDs.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -403,6 +414,13 @@ class BlockRef(BaseModel):
         ...,
         description=(
             "Nombre del archivo del bloque (por ejemplo 'nutrimouse_gene.csv')."
+        ),
+    )
+    role: Literal["block", "metadata"] = Field(
+        default="block",
+        description=(
+            "Rol del bloque: 'block' aporta variables al modelo, "
+            "'metadata' es una tabla de anotaciones (fenotipo)."
         ),
     )
     path: str = Field(
@@ -415,7 +433,18 @@ class BlockRef(BaseModel):
     )
     n_variables: int = Field(
         ...,
-        description="Cantidad de variables (columnas numéricas) del bloque.",
+        description="Cantidad de variables (columnas) del bloque.",
+    )
+    n_numeric_variables: int = Field(
+        ...,
+        description="Cantidad de variables numéricas del bloque, por dtype.",
+    )
+    categorical_columns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Columnas que NO son numéricas. Lista completa: las variables "
+            "numéricas se deducen por diferencia con n_variables."
+        ),
     )
     sample_ids: list[str] = Field(
         default_factory=list,
@@ -438,6 +467,28 @@ class Alignment(BaseModel):
     discarded: dict[str, list[str]] = Field(
         default_factory=dict,
         description="IDs descartados por bloque.",
+    )
+    confirmed: bool = Field(
+        default=False,
+        description="Si el usuario confirmó la alineación.",
+    )
+
+
+class AlignmentRequest(BaseModel):
+    """Solicitud de alineación entre bloques (RF-2, RB-3).
+
+    El cliente manda los **nombres** de los bloques a alinear, en orden: el
+    primero es el que fija el orden canónico de las muestras. La alineación
+    se calcula desde la receta (los IDs de muestra ya están ahí), sin abrir
+    ni materializar ninguna matriz (S29).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Nombres de los bloques a alinear, en orden.",
     )
     confirmed: bool = Field(
         default=False,
@@ -526,6 +577,70 @@ class Dataset(BaseModel):
     target: TargetSpec | None = Field(
         default=None,
         description="Variable de clase, si el análisis es supervisado.",
+    )
+
+
+class DatasetSummary(BaseModel):
+    """Resumen de una receta, para listarlas sin arrastrar los bloques."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str = Field(..., description="Identificador de la sesión de datos.")
+    n_blocks: int = Field(..., description="Cantidad de bloques de la receta.")
+    target: TargetSpec | None = Field(
+        default=None,
+        description="Variable de clase, si la receta ya la tiene.",
+    )
+
+
+class DatasetListResponse(BaseModel):
+    """Listado de las recetas guardadas."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    datasets: list[DatasetSummary] = Field(default_factory=list)
+    total: int = Field(default=0)
+
+
+class DatasetBlockInput(BaseModel):
+    """Bloque solicitado para una receta: el archivo y el rol que tiene.
+
+    El cliente manda **el nombre**, nunca la ruta: el backend resuelve la
+    ruta dentro de su propio directorio de datos, así que el renderer no
+    puede pedirle que lea un archivo de cualquier parte del disco.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        ...,
+        description="Nombre del archivo subido que compone la receta.",
+    )
+    role: Literal["block", "metadata"] = Field(
+        default="block",
+        description=(
+            "Rol del bloque: 'block' aporta variables al modelo, "
+            "'metadata' es una tabla de anotaciones (fenotipo)."
+        ),
+    )
+
+
+class DatasetCreate(BaseModel):
+    """Alta de una receta de dataset: qué archivos la componen."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[DatasetBlockInput] = Field(
+        ...,
+        min_length=1,
+        description="Bloques que componen el dataset, en orden.",
+    )
+    target: TargetSpec | None = Field(
+        default=None,
+        description=(
+            "Variable de clase (bloque + columna). Si no viene, se puede "
+            "fijar más adelante; en ese caso la receta no es supervisada."
+        ),
     )
 
 
@@ -680,7 +795,7 @@ class Job(BaseModel):
         ...,
         description="Identificador del job.",
     )
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"] = Field(
+    status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(
         ...,
         description="Estado del job.",
     )
@@ -696,3 +811,52 @@ class Job(BaseModel):
         default=None,
         description="Error estructurado, si el job falló.",
     )
+
+
+class JobAccepted(BaseModel):
+    """Identificador de un job aceptado por la API."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str = Field(
+        ...,
+        description="Identificador del job.",
+    )
+
+
+class JobPathsSpec(BaseModel):
+    """Rutas del protocolo de archivos de un job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    spec: str
+    progress: str
+    result: str
+    error: str
+    log: str
+
+
+class JobModelSpec(BaseModel):
+    """Parámetros del modelo dentro de la especificación del job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_type: Literal["PCA", "DIABLO"]
+    n_components: int = Field(ge=1, le=10)
+    keepX: dict[str, list[int]] | None = None
+    design: list[list[float]] | None = None
+    seed: int | None = None
+
+
+class JobSpec(BaseModel):
+    """Especificación completa que el proceso hijo recibe por ``argv``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+    dataset_id: str
+    blocks: list[BlockRef]
+    alignment: Alignment | None = None
+    target: TargetSpec | None = None
+    model: JobModelSpec
+    paths: JobPathsSpec

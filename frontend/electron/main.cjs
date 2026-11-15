@@ -14,6 +14,8 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('electron');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 const { openAsBlob } = require('node:fs');
 const { BackendManager } = require('./backend.cjs');
@@ -99,6 +101,48 @@ const backendDir = path.join(projectRoot, 'backend');
 
 /** @type {BrowserWindow | null} */
 /**
+ * Verifica la rotación del archivo de log sobre un directorio temporal.
+ *
+ * No toca el log real del usuario: el smoke crea su propio directorio,
+ * escribe un log más grande que el tope y comprueba que queda rotado, y
+ * que un log chico no se rota.
+ *
+ * @returns {boolean} - true si la rotación se comportó como se espera.
+ */
+function checkLogRotation() {
+  const temporal = fs.mkdtempSync(path.join(os.tmpdir(), 'pythomics-log-'));
+  try {
+    const manager = new BackendManager({
+      backendDir: '',
+      userDataDir: temporal,
+      inheritStdio: true,
+    });
+    fs.writeFileSync(manager.logPath, 'x'.repeat(6 * 1024 * 1024));
+
+    const rotado = manager.rotateLogIfNeeded(5 * 1024 * 1024);
+    const anterior = `${manager.logPath}.1`;
+    const conservado = fs.existsSync(anterior);
+    const nuevoVacio = !fs.existsSync(manager.logPath);
+
+    // Un log que no llega al tope no se toca.
+    const chico = new BackendManager({
+      backendDir: '',
+      userDataDir: temporal,
+      inheritStdio: true,
+    });
+    fs.writeFileSync(chico.logPath, 'poco');
+    const rotadoDeMas = chico.rotateLogIfNeeded(5 * 1024 * 1024);
+
+    return rotado && conservado && nuevoVacio && !rotadoDeMas;
+  } catch (err) {
+    console.error('[smoke] no se pudo probar la rotación del log:', err.message);
+    return false;
+  } finally {
+    fs.rmSync(temporal, { recursive: true, force: true });
+  }
+}
+
+/**
  * Smoke de producción.
  *
  * Con PYTHOMICS_SMOKE=1 la app arranca contra el build compilado, verifica
@@ -142,6 +186,7 @@ function setupSmokeCheck() {
       ['hay un <h1> en la página', Boolean(info && info.h1)],
       ['el tema se aplicó', Boolean(info && info.theme)],
       ['sin violaciones de CSP', violations.length === 0],
+      ['el log se rota al superar el tope', checkLogRotation()],
     ];
     if (!isDev) {
       checks.push([

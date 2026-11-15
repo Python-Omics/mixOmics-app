@@ -42,11 +42,18 @@ class ErrorCode(StrEnum):
     ``E_NOT_NUMERIC`` ya no se lanza desde la ingesta: esta acepta tablas
     categóricas y registra su clasificación. Se usa al validar un model
     request que requiera un bloque de variables numéricas.
+
+    ``E_MALFORMED_FILE`` se lanza cuando las filas del archivo no coinciden
+    con su encabezado. Sin esa validación, ``pandas`` consume los campos
+    sobrantes de una fila como índice y desplaza en silencio los IDs de
+    muestra y los valores (caso típico: un CSV con coma decimal).
     """
 
     # Validación de la carga (RB-14, RF-1)
     E_FILE_EXTENSION = "E_FILE_EXTENSION"
     E_EMPTY_FILE = "E_EMPTY_FILE"
+    E_MALFORMED_FILE = "E_MALFORMED_FILE"
+    E_MISSING_VALUES = "E_MISSING_VALUES"
     E_NOT_NUMERIC = "E_NOT_NUMERIC"
 
     # Integridad de las matrices (RB-1, RB-3, RF-2)
@@ -62,6 +69,9 @@ class ErrorCode(StrEnum):
     # Precondiciones del modelo
     E_MODEL_UNKNOWN = "E_MODEL_UNKNOWN"
     E_TARGET_COLUMN_MISSING = "E_TARGET_COLUMN_MISSING"
+
+    # Precondiciones de la alineación (RF-2, S39)
+    E_TARGET_BLOCK_NOT_ALIGNED = "E_TARGET_BLOCK_NOT_ALIGNED"
 
     # Dependencias ausentes en el entorno
     E_R_NOT_AVAILABLE = "E_R_NOT_AVAILABLE"
@@ -94,6 +104,8 @@ class WarningCode(StrEnum):
 HTTP_STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.E_FILE_EXTENSION: 400,
     ErrorCode.E_EMPTY_FILE: 400,
+    ErrorCode.E_MALFORMED_FILE: 400,
+    ErrorCode.E_MISSING_VALUES: 400,
     ErrorCode.E_NOT_NUMERIC: 400,
     ErrorCode.E_DUPLICATE_SAMPLES: 409,
     ErrorCode.E_NO_COMMON_SAMPLES: 400,
@@ -103,6 +115,7 @@ HTTP_STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.E_JOB_NOT_FOUND: 404,
     ErrorCode.E_MODEL_UNKNOWN: 422,
     ErrorCode.E_TARGET_COLUMN_MISSING: 422,
+    ErrorCode.E_TARGET_BLOCK_NOT_ALIGNED: 422,
     ErrorCode.E_R_NOT_AVAILABLE: 503,
     ErrorCode.E_MIXOMICS_NOT_AVAILABLE: 503,
     ErrorCode.E_WORKER_CRASHED: 500,

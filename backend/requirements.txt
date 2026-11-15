@@ -16,5 +16,8 @@ python-multipart
 
 # Dependencias de desarrollo (no se instalan en produccion):
 #   pytest  -> tests del backend (backend/tests/)
-# Instalar con: backend/.venv/bin/pip install pytest
+#   httpx2  -> TestClient de FastAPI (starlette 1.9 lo exige para probar
+#              las rutas HTTP); es el cliente canonico de las pruebas.
+# Instalar con: backend/.venv/bin/pip install pytest httpx2
 # pytest
+# httpx2

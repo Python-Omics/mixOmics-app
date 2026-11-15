@@ -47,6 +47,7 @@ const ERROR_MESSAGE_KEYS = [
   ['E_FILE_EXTENSION', 'errors.fileExtension'],
   ['E_EMPTY_FILE', 'errors.emptyFile'],
   ['E_MALFORMED_FILE', 'errors.malformedFile'],
+  ['E_MISSING_VALUES', 'errors.missingValues'],
   ['E_NOT_NUMERIC', 'errors.notNumeric'],
   ['E_DUPLICATE_SAMPLES', 'errors.duplicateSamples'],
   ['E_NO_COMMON_SAMPLES', 'errors.noCommonSamples'],
@@ -56,6 +57,7 @@ const ERROR_MESSAGE_KEYS = [
   ['E_JOB_NOT_FOUND', 'errors.jobNotFound'],
   ['E_MODEL_UNKNOWN', 'errors.modelUnknown'],
   ['E_TARGET_COLUMN_MISSING', 'errors.targetColumnMissing'],
+  ['E_TARGET_BLOCK_NOT_ALIGNED', 'errors.targetBlockNotAligned'],
   ['E_R_NOT_AVAILABLE', 'errors.rNotAvailable'],
   ['E_MIXOMICS_NOT_AVAILABLE', 'errors.mixomicsNotAvailable'],
   ['E_WORKER_CRASHED', 'errors.workerCrashed'],
@@ -105,7 +107,6 @@ const CATALOG_KEYS: ReadonlySet<string> = new Set(Object.keys(esCatalog));
 const SUPPORTED_INGEST_WARNING_KEYS: ReadonlySet<string> = new Set([
   'ingest.warnings.nonNumericColumns',
   'ingest.warnings.encodingRepaired',
-  'ingest.warnings.missingValues',
 ]);
 
 /**
@@ -132,10 +133,8 @@ function translateWarning(
   const key = resolveWarningMessageKey(warning.message_key);
   if (!key) return t('ingest.warningGeneric');
 
-  const rawCount = warning.detail?.total_cells;
   const text = t(key, {
     columns: warning.columns?.join(', ') ?? '',
-    count: typeof rawCount === 'number' ? rawCount : 0,
   });
   return text === key ? t('ingest.warningGeneric') : text;
 }

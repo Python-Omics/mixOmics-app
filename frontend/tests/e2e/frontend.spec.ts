@@ -106,28 +106,20 @@ const NON_NUMERIC_WARNING_RESPONSE: ApiResponse<UploadResponse> = {
   },
 };
 
-const MISSING_VALUES_WARNING_RESPONSE: ApiResponse<unknown> = {
-  ok: true,
-  status: 201,
+const MISSING_VALUES_ERROR_RESPONSE: ApiResponse<unknown> = {
+  ok: false,
+  status: 400,
   data: {
-    block: {
-      name: 'demo',
-      filename: 'demo.csv',
-      n_samples: 3,
-      n_variables: 2,
-      n_numeric_variables: 2,
-      columns: ['feature_1', 'feature_2'],
-      sample_id_column: 'sample',
-    },
-    warnings: [
-      {
-        code: 'W_MISSING_VALUES',
-        message_key: 'ingest.warnings.missingValues',
+    error: {
+      code: 'E_MISSING_VALUES',
+      message_key: 'errors.missingValues',
+      detail: {
+        file: 'demo.csv',
+        total_cells: 7,
+        affected_columns: 1,
         columns: ['feature_2'],
-        detail: { total_cells: 7, affected_columns: 1 },
       },
-    ],
-    preview: { columns: ['sample', 'feature_1'], rows: [['S1', '1.0']] },
+    },
   },
 };
 
@@ -1009,23 +1001,21 @@ test.describe('Rutas contra el backend real', () => {
     });
   });
 
-  test.describe('warning de celdas faltantes', () => {
-    test.use({ uploadResponse: MISSING_VALUES_WARNING_RESPONSE });
+  test.describe('error de celdas faltantes', () => {
+    test.use({ uploadResponse: MISSING_VALUES_ERROR_RESPONSE });
 
-    test('muestra cuántas celdas faltan y en qué columnas', async ({
+    test('muestra cuántas celdas faltan y por qué no se puede cargar', async ({
       page,
     }) => {
       await gotoPipeline(page);
       await uploadCsv(page, 'demo.csv');
 
-      const translated = msg('ingest.warnings.missingValues', {
-        count: 7,
-        columns: 'feature_2',
+      const translated = msg('errors.missingValues', {
+        file: 'demo.csv',
+        total_cells: 7,
       });
       await expect(page.getByText(translated)).toBeVisible();
-      await expect(
-        page.getByText('ingest.warnings.missingValues'),
-      ).toHaveCount(0);
+      await expect(page.getByText('errors.missingValues')).toHaveCount(0);
     });
 
     test('se muestra traducido en inglés', async ({ page }) => {
@@ -1035,8 +1025,8 @@ test.describe('Rutas contra el backend real', () => {
       await uploadCsv(page, 'demo.csv');
 
       const translated = msg(
-        'ingest.warnings.missingValues',
-        { count: 7, columns: 'feature_2' },
+        'errors.missingValues',
+        { file: 'demo.csv', total_cells: 7 },
         'en',
       );
       await expect(page.getByText(translated)).toBeVisible();

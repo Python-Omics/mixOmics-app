@@ -18,6 +18,11 @@ const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 
+/**
+ * Tope de tamaño del archivo de log antes de rotarlo (5 MB).
+ */
+const MAX_LOG_BYTES = 5 * 1024 * 1024;
+
 class BackendManager extends EventEmitter {
   /**
    * @param {object} opts
@@ -36,6 +41,39 @@ class BackendManager extends EventEmitter {
    *   de Vite. En producción no hay terminal, así que la salida se captura
    *   por un pipe: se escribe en el archivo de log y se emite por IPC.
    */
+  /**
+   * Rota el archivo de log si supera el tope de tamaño.
+   *
+   * La rotación ocurre al arrancar, con ningún stream abierto: rotar en
+   * caliente exigiría cerrar y reabrir el stream, y en Windows el rename
+   * falla si otro proceso tiene el archivo abierto. Se conserva una copia
+   * anterior, así que el disco queda acotado a dos archivos.
+   *
+   * Si la rotación falla, la app tiene que arrancar igual: es preferible
+   * un log que crece a una app que no abre.
+   *
+   * @param {number} [maxBytes] - tope de tamaño del log.
+   * @returns {boolean} - true si el log se rotó.
+   */
+  rotateLogIfNeeded(maxBytes = MAX_LOG_BYTES) {
+    try {
+      if (!fs.existsSync(this.logPath)) return false;
+      if (fs.statSync(this.logPath).size <= maxBytes) return false;
+
+      const anterior = `${this.logPath}.1`;
+      if (fs.existsSync(anterior)) fs.unlinkSync(anterior);
+      fs.renameSync(this.logPath, anterior);
+      return true;
+    } catch (err) {
+      this.emit('log', {
+        stream: 'system',
+        text: `[manager] No se pudo rotar el log: ${err.message}\n`,
+        timestamp: Date.now(),
+      });
+      return false;
+    }
+  }
+
   constructor({ backendDir, port = 8501, userDataDir, dataDir, apiToken, inheritStdio = false }) {
     super();
     this.backendDir = backendDir;
@@ -87,6 +125,11 @@ class BackendManager extends EventEmitter {
     // tiene que quedar en disco y disponible por IPC, así que se captura
     // por un pipe.
     const inheritStdio = this.inheritStdio;
+    if (!inheritStdio) {
+      // El log de la sesión anterior se rota antes de abrir el nuevo, para
+      // que no crezca sin límite.
+      this.rotateLogIfNeeded();
+    }
     const logStream = inheritStdio
       ? null
       : fs.createWriteStream(this.logPath, { flags: 'a' });

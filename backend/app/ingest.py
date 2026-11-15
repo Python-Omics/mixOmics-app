@@ -56,6 +56,8 @@ class ParsedBlock:
     n_variables: int
     n_numeric_variables: int
     columns: list[str]
+    categorical_columns: list[str]
+    sample_ids: list[str]
     sample_id_column: str
     warnings: list[IngestWarning]
     preview: PreviewData
@@ -77,7 +79,8 @@ def parse_block(path: Path, filename: str) -> ParsedBlock:
 
     Raises:
         PythomicsError: Si la extensión no está soportada, el archivo está
-            vacío o hay IDs duplicados.
+            vacío, sus filas no coinciden con el encabezado o hay IDs
+            duplicados.
     """
     extension = Path(filename).suffix.lower()
     if extension not in SUPPORTED_EXTENSIONS:
@@ -135,6 +138,27 @@ def parse_block(path: Path, filename: str) -> ParsedBlock:
             )
         )
 
+    # Una celda vacía es un dato faltante, y el MVP no preprocesa.
+    # `NipalsPCA` no falla con `NaN`: lo absorbe en los momentos y devuelve
+    # scores plausibles pero incorrectos. Rechazar acá, con un motivo
+    # claro, es mejor que dejar que el cálculo produzca basura en
+    # silencio (decisión del operador, L18 del plan).
+    missing_by_column = _count_missing_by_column(frame)
+    missing_columns = [
+        name for name, count in missing_by_column.items() if count > 0
+    ]
+    total_missing = sum(missing_by_column.values())
+    if total_missing > 0:
+        raise PythomicsError(
+            ErrorCode.E_MISSING_VALUES,
+            detail={
+                "file": filename,
+                "total_cells": total_missing,
+                "affected_columns": len(missing_columns),
+                "columns": missing_columns,
+            },
+        )
+
     preview = _build_preview(frame, sample_id_column)
 
     return ParsedBlock(
@@ -146,6 +170,8 @@ def parse_block(path: Path, filename: str) -> ParsedBlock:
         columns=[
             str(column) for column in variable_columns[:MAX_REPORTED_COLUMNS]
         ],
+        categorical_columns=non_numeric_columns,
+        sample_ids=sample_ids,
         sample_id_column=sample_id_column,
         warnings=warnings,
         preview=preview,
@@ -187,25 +213,76 @@ def _detect_delimiter(text: str, filename: str) -> str:
 
 
 def _read_frame(text: str, delimiter: str, filename: str) -> pd.DataFrame:
-    """Lee el contenido como texto para conservar los valores del preview."""
+    """Lee el contenido como tabla normalizada y valida el ancho de las filas.
+
+    Se usa ``csv.reader`` en vez de dejar que ``pandas`` infiera la forma.
+    ``pandas`` consume en silencio los campos sobrantes de una fila como
+    índice del frame, lo que desplaza los IDs de muestra y los valores sin
+    avisar: un CSV con coma decimal (``1,5``) queda con los IDs equivocados
+    y una columna constante, sin ningún error. Validando el ancho antes de
+    construir la tabla, ese caso se rechaza en vez de corromper los datos.
+
+    Criterio de normalización:
+
+    - una fila con **más** campos que el encabezado y contenido en los
+      sobrantes es ambigua: se rechaza;
+    - una fila con más campos pero todos los sobrantes vacíos es el artefacto
+      de la coma final: se recorta;
+    - una fila con **menos** campos se completa con celdas vacías, igual que
+      una celda vacía explícita.
+    """
     try:
-        return pd.read_csv(
-            io.StringIO(text),
-            sep=delimiter,
-            engine="python",
-            dtype=str,
-            keep_default_na=False,
-        )
-    except pd.errors.EmptyDataError as exc:
+        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+    except csv.Error as exc:
+        raise PythomicsError(
+            ErrorCode.E_MALFORMED_FILE,
+            detail={"file": filename, "reason": str(exc)},
+        ) from exc
+
+    # Las líneas en blanco no son registros (mismo criterio que pandas).
+    rows = [row for row in rows if row]
+    if not rows:
         raise PythomicsError(
             ErrorCode.E_EMPTY_FILE,
             detail={"file": filename},
-        ) from exc
-    except pd.errors.ParserError as exc:
-        raise PythomicsError(
-            ErrorCode.E_UNEXPECTED,
-            detail={"file": filename, "reason": str(exc)},
-        ) from exc
+        )
+
+    header = _unique_columns([str(cell) for cell in rows[0]])
+    width = len(header)
+    normalized: list[list[str]] = []
+
+    for line_number, row in enumerate(rows[1:], start=2):
+        values = [str(cell) for cell in row]
+        if len(values) > width:
+            extra = values[width:]
+            if all(cell.strip() == "" for cell in extra):
+                values = values[:width]
+            else:
+                raise PythomicsError(
+                    ErrorCode.E_MALFORMED_FILE,
+                    detail={
+                        "file": filename,
+                        "line": line_number,
+                        "expected_fields": width,
+                        "found_fields": len(values),
+                    },
+                )
+        elif len(values) < width:
+            values = values + [""] * (width - len(values))
+        normalized.append(values)
+
+    return pd.DataFrame(normalized, columns=header, dtype=str)
+
+
+def _unique_columns(header: list[str]) -> list[str]:
+    """Hace únicos los nombres de columna repetidos, como hace pandas."""
+    seen: dict[str, int] = {}
+    unique: list[str] = []
+    for name in header:
+        count = seen.get(name, 0)
+        seen[name] = count + 1
+        unique.append(name if count == 0 else f"{name}.{count}")
+    return unique
 
 
 def _validate_unique_sample_ids(sample_ids: list[str], filename: str) -> None:
@@ -263,6 +340,24 @@ def _uses_decimal_comma(values: pd.Series, delimiter: str) -> bool:
     if delimiter == ",":
         return False
     return values.astype(str).str.strip().str.match(_DECIMAL_COMMA_RE).any()
+
+
+def _count_missing_by_column(frame: pd.DataFrame) -> dict[str, int]:
+    """Cuenta las celdas vacías de cada columna.
+
+    Una celda vacía es un dato faltante: al materializar la matriz se
+    convierte en ``NaN`` y la política para tratarla (imputar, descartar la
+    muestra o fallar) se decide en el preprocesamiento (RF-3), no en la
+    ingesta. Aquí solo se informa el hecho, con su magnitud: dos celdas
+    vacías y el cuarenta por ciento de las celdas vacías son problemas
+    distintos, y la vista previa (5 filas) no lo distingue.
+
+    Una fila con menos campos que el encabezado cuenta como celdas vacías
+    en las columnas que faltan: es el mismo dato faltante, escrito de otra
+    forma.
+    """
+    counts = frame.eq("").sum()
+    return {str(name): int(count) for name, count in counts.items()}
 
 
 def _build_preview(frame: pd.DataFrame, sample_id_column: str) -> PreviewData:

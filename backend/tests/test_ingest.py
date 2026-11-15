@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from app.errors import ErrorCode, PythomicsError, derive_warning_message_key
+from app.errors import (
+    ErrorCode,
+    PythomicsError,
+    derive_warning_message_key,
+)
 from app.ingest import parse_block
 
 
@@ -262,3 +266,143 @@ def test_warning_message_key_se_deriva_deterministicamente() -> None:
         derive_warning_message_key("W_ENCODING_REPAIRED")
         == "ingest.warnings.encodingRepaired"
     )
+
+
+def test_parse_block_rechaza_coma_decimal_en_csv(tmp_path: Path) -> None:
+    """Una fila más ancha que el encabezado es ambigua: se rechaza.
+
+    Sin este rechazo, ``pandas`` toma los campos sobrantes como índice y
+    desplaza los IDs de muestra y los valores en silencio: el bloque
+    terminaba con los IDs equivocados y una columna constante.
+    """
+    path = _write(
+        tmp_path,
+        "decimal.csv",
+        "sample,g1\nS1,1,5\nS2,3,5\n",
+    )
+
+    with pytest.raises(PythomicsError) as exc_info:
+        parse_block(path, "decimal.csv")
+
+    assert exc_info.value.code is ErrorCode.E_MALFORMED_FILE
+    assert exc_info.value.detail["file"] == "decimal.csv"
+    assert exc_info.value.detail["line"] == 2
+    assert exc_info.value.detail["expected_fields"] == 2
+    assert exc_info.value.detail["found_fields"] == 3
+
+
+def test_parse_block_rechaza_fila_mas_ancha_con_contenido(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        "wide.csv",
+        "sample,g1,g2\nS1,1.5,2.5,extra\n",
+    )
+
+    with pytest.raises(PythomicsError) as exc_info:
+        parse_block(path, "wide.csv")
+
+    assert exc_info.value.code is ErrorCode.E_MALFORMED_FILE
+    assert exc_info.value.detail["found_fields"] == 4
+
+
+def test_parse_block_recorta_coma_final_sobrante(tmp_path: Path) -> None:
+    """Los campos sobrantes vacíos son el artefacto de la coma final."""
+    path = _write(
+        tmp_path,
+        "trailing.csv",
+        "sample,g1\nS1,1.5,\nS2,3.5,\n",
+    )
+
+    parsed = parse_block(path, "trailing.csv")
+
+    assert parsed.n_samples == 2
+    assert parsed.n_variables == 1
+    assert parsed.n_numeric_variables == 1
+    assert parsed.warnings == []
+    assert parsed.preview.rows == [["S1", "1.5"], ["S2", "3.5"]]
+
+
+def test_parse_block_rechaza_filas_cortas_por_tener_faltantes(
+    tmp_path: Path,
+) -> None:
+    """Una fila corta equivale a una celda vacía: el MVP no completa datos."""
+    path = _write(
+        tmp_path,
+        "short.csv",
+        "sample,g1,g2\nS1,1.5,2.5\nS2,3.5,4.5\nS3,5.5\n",
+    )
+
+    with pytest.raises(PythomicsError) as exc_info:
+        parse_block(path, "short.csv")
+
+    assert exc_info.value.code is ErrorCode.E_MISSING_VALUES
+    assert exc_info.value.detail["total_cells"] == 1
+    assert exc_info.value.detail["columns"] == ["g2"]
+
+
+def test_parse_block_rechaza_las_celdas_vacias(tmp_path: Path) -> None:
+    """El rechazo informa cuántas celdas faltan y en qué columnas.
+
+    Los faltantes no son un aviso: `NipalsPCA` no falla con `NaN`, lo absorbe
+    y devuelve scores plausibles pero incorrectos.
+    """
+    path = _write(
+        tmp_path,
+        "missing.csv",
+        "sample,g1,g2\nS1,1.5,\nS2,,4.5\nS3,3.5,6.5\n",
+    )
+
+    with pytest.raises(PythomicsError) as exc_info:
+        parse_block(path, "missing.csv")
+
+    assert exc_info.value.code is ErrorCode.E_MISSING_VALUES
+    assert exc_info.value.detail["file"] == "missing.csv"
+    assert exc_info.value.detail["total_cells"] == 2
+    assert exc_info.value.detail["affected_columns"] == 2
+    assert exc_info.value.detail["columns"] == ["g1", "g2"]
+    assert exc_info.value.message_key == "errors.missingValues"
+
+
+def test_parse_block_no_avisa_faltantes_en_un_archivo_completo(
+    tmp_path: Path,
+) -> None:
+    path = _write(
+        tmp_path,
+        "complete.csv",
+        "sample,g1,g2\nS1,1.5,2.5\nS2,3.5,4.5\n",
+    )
+
+    parsed = parse_block(path, "complete.csv")
+
+    assert parsed.warnings == []
+
+
+def test_parse_block_renombra_columnas_duplicadas(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "duplicated.csv",
+        "sample,g1,g1\nS1,1.5,2.5\n",
+    )
+
+    parsed = parse_block(path, "duplicated.csv")
+
+    assert parsed.columns == ["g1", "g1.1"]
+    assert parsed.n_variables == 2
+    assert parsed.n_numeric_variables == 2
+
+
+def test_parse_block_conserva_los_ids_de_muestra(tmp_path: Path) -> None:
+    """Los IDs de la primera columna son los del archivo, sin desplazamientos."""
+    path = _write(
+        tmp_path,
+        "ids.csv",
+        "sample,g1,g2\nS1,1.5,2.5\nS2,3.5,4.5\n",
+    )
+
+    parsed = parse_block(path, "ids.csv")
+
+    assert parsed.sample_id_column == "sample"
+    assert [row[0] for row in parsed.preview.rows] == ["S1", "S2"]
+    assert parsed.preview.rows[0] == ["S1", "1.5", "2.5"]
