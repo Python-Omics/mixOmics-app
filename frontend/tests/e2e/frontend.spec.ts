@@ -106,6 +106,31 @@ const NON_NUMERIC_WARNING_RESPONSE: ApiResponse<UploadResponse> = {
   },
 };
 
+const MISSING_VALUES_WARNING_RESPONSE: ApiResponse<unknown> = {
+  ok: true,
+  status: 201,
+  data: {
+    block: {
+      name: 'demo',
+      filename: 'demo.csv',
+      n_samples: 3,
+      n_variables: 2,
+      n_numeric_variables: 2,
+      columns: ['feature_1', 'feature_2'],
+      sample_id_column: 'sample',
+    },
+    warnings: [
+      {
+        code: 'W_MISSING_VALUES',
+        message_key: 'ingest.warnings.missingValues',
+        columns: ['feature_2'],
+        detail: { total_cells: 7, affected_columns: 1 },
+      },
+    ],
+    preview: { columns: ['sample', 'feature_1'], rows: [['S1', '1.0']] },
+  },
+};
+
 const UNKNOWN_BLOCK_ERROR_RESPONSE: ApiResponse<unknown> = {
   ok: false,
   status: 404,
@@ -778,6 +803,20 @@ test.describe('Rutas contra el backend real', () => {
       ).toHaveCount(0);
     });
 
+    test('el resumen muestra qué columna contiene los IDs de muestra', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      // Es la defensa más barata contra un archivo sin fila de
+      // encabezado: si el nombre de la columna de IDs es un valor (por
+      // ejemplo "S1"), el error se ve sin interpretar nada.
+      await expect(
+        page.getByText(msg('ingest.sampleIdColumn', { column: 'sample_id' })),
+      ).toBeVisible();
+    });
+
     test.describe('bloque mixto (numéricas + no numéricas)', () => {
       test.use({
         block: {
@@ -967,6 +1006,40 @@ test.describe('Rutas contra el backend real', () => {
           msg('ingest.warnings.nonNumericColumns', { columns: 'metadata' }),
         ),
       ).toHaveCount(0);
+    });
+  });
+
+  test.describe('warning de celdas faltantes', () => {
+    test.use({ uploadResponse: MISSING_VALUES_WARNING_RESPONSE });
+
+    test('muestra cuántas celdas faltan y en qué columnas', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+
+      const translated = msg('ingest.warnings.missingValues', {
+        count: 7,
+        columns: 'feature_2',
+      });
+      await expect(page.getByText(translated)).toBeVisible();
+      await expect(
+        page.getByText('ingest.warnings.missingValues'),
+      ).toHaveCount(0);
+    });
+
+    test('se muestra traducido en inglés', async ({ page }) => {
+      await seedLocale(page, 'en');
+      await page.goto('/');
+      await page.getByRole('button', { name: en['home.cta'] }).click();
+      await uploadCsv(page, 'demo.csv');
+
+      const translated = msg(
+        'ingest.warnings.missingValues',
+        { count: 7, columns: 'feature_2' },
+        'en',
+      );
+      await expect(page.getByText(translated)).toBeVisible();
     });
   });
 
