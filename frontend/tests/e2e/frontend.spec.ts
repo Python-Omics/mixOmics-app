@@ -3,7 +3,12 @@ import { createIntl } from 'react-intl';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ApiCallRecord } from '../../src/lib/types';
+import type {
+  ApiCallRecord,
+  ApiResponse,
+  PyxAPI,
+  UploadResponse,
+} from '../../src/lib/types';
 import { installApiMock } from '../../playwright.config';
 import es from '../../src/i18n/es.json' with { type: 'json' };
 import en from '../../src/i18n/en.json' with { type: 'json' };
@@ -1083,6 +1088,143 @@ test.describe('Anti-FOUC de idioma, título y splash', () => {
     });
     expect(initSource).toContain(es['app.title']);
     expect(initSource).toContain(en['app.title']);
+  });
+});
+
+/**
+ * Errores del backend.
+ *
+ * El backend devuelve los errores de dominio en su propio sobre
+ * (`{"error": {code, message_key, detail}}`): el renderer tiene que
+ * consumirlo y traducirlo con su catálogo. Los dos formatos de FastAPI
+ * (`detail` string y lista de validación 422) se conservan como fallback.
+ *
+ * Los textos assertados salen de los catálogos: un assert literal se
+ * desincroniza apenas cambia el copy.
+ */
+
+/**
+ * Mock del preload que devuelve un error del backend.
+ *
+ * Se registra DESPUÉS del mock por defecto (`installApiMock`, que corre en
+ * el `beforeEach` de archivo), así que lo reemplaza: solo cambia la
+ * respuesta de la subida; el resto de la API sigue siendo la de siempre.
+ */
+function installErrorApiMock(response: {
+  status: number;
+  body: unknown;
+}) {
+  const w = window as unknown as {
+    pyxAPI: PyxAPI;
+    __apiCalls?: ApiCallRecord[];
+  };
+  const original = w.pyxAPI;
+  w.pyxAPI = {
+    ...original,
+    api: {
+      ...original.api,
+      upload: (path: string, filename: string) => {
+        (w.__apiCalls ??= []).push({ method: 'POST', path, filename });
+        return Promise.resolve({
+          ok: false,
+          status: response.status,
+          data: response.body,
+        }) as unknown as Promise<ApiResponse<UploadResponse>>;
+      },
+    },
+  };
+}
+
+test.describe('Errores del backend', () => {
+  test('el sobre de error del backend se muestra traducido en la UI', async ({
+    page,
+  }) => {
+    await page.addInitScript(installErrorApiMock, {
+      status: 404,
+      body: {
+        error: {
+          code: 'E_UNKNOWN_BLOCK',
+          message_key: 'errors.unknownBlock',
+          detail: { file: 'nutrimouse_gene.csv' },
+        },
+      },
+    });
+    await page.goto('/');
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    // El mensaje sale del catálogo, interpolando el `detail` del backend.
+    await expect(
+      page.getByText(msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' })),
+    ).toBeVisible();
+    // Y no queda en blanco ni muestra la clave cruda.
+    await expect(page.getByText('errors.unknownBlock')).toHaveCount(0);
+  });
+
+  test('el mismo error muestra textos distintos según el idioma', async ({
+    page,
+  }) => {
+    await seedLocale(page, 'en');
+    await page.addInitScript(installErrorApiMock, {
+      status: 404,
+      body: {
+        error: {
+          code: 'E_UNKNOWN_BLOCK',
+          message_key: 'errors.unknownBlock',
+          detail: { file: 'nutrimouse_gene.csv' },
+        },
+      },
+    });
+    await page.goto('/');
+    await page.getByRole('button', { name: en['home.cta'] }).click();
+    await uploadCsv(page, 'demo.csv');
+
+    // En inglés sale el texto de en.json.
+    await expect(
+      page.getByText(
+        msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' }, 'en'),
+      ),
+    ).toBeVisible();
+    // Y el de es.json no aparece por ninguna parte.
+    await expect(
+      page.getByText(msg('errors.unknownBlock', { file: 'nutrimouse_gene.csv' })),
+    ).toHaveCount(0);
+  });
+
+  test('el fallback de FastAPI (detail string) sigue mostrando el texto', async ({
+    page,
+  }) => {
+    await page.addInitScript(installErrorApiMock, {
+      status: 500,
+      body: { detail: 'El archivo no existe.' },
+    });
+    await page.goto('/');
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    await expect(page.getByText('El archivo no existe.')).toBeVisible();
+  });
+
+  test('el fallback de validación 422 (detail lista) sigue mostrando el texto', async ({
+    page,
+  }) => {
+    await page.addInitScript(installErrorApiMock, {
+      status: 422,
+      body: {
+        detail: [
+          {
+            loc: ['body', 'filename'],
+            msg: 'field required',
+            type: 'value_error.missing',
+          },
+        ],
+      },
+    });
+    await page.goto('/');
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    await expect(page.getByText('field required')).toBeVisible();
   });
 });
 

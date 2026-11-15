@@ -24,12 +24,26 @@ class BackendManager extends EventEmitter {
    * @param {string} opts.backendDir - directorio donde vive main.py
    * @param {number} [opts.port=8501]
    * @param {string} opts.userDataDir - directorio para el log file
+   * @param {string} [opts.dataDir] - directorio de datos del backend.
+   *   En desarrollo apunta al repo (backend/data, gitignorado); en producción
+   *   al perfil del usuario, que siempre es escribible.
+   * @param {string} [opts.apiToken] - token compartido con la API. Se pasa
+   *   por entorno: es la credencial que impide que una página web cualquiera
+   *   escriba en el backend local.
+   * @param {boolean} [opts.inheritStdio] - si el backend escribe su stdout
+   *   y su stderr directamente en la terminal del proceso Electron. En
+   *   desarrollo eso deja los logs de uvicorn a la vista, mezclados con los
+   *   de Vite. En producción no hay terminal, así que la salida se captura
+   *   por un pipe: se escribe en el archivo de log y se emite por IPC.
    */
-  constructor({ backendDir, port = 8501, userDataDir }) {
+  constructor({ backendDir, port = 8501, userDataDir, dataDir, apiToken, inheritStdio = false }) {
     super();
     this.backendDir = backendDir;
     this.port = port;
     this.userDataDir = userDataDir;
+    this.dataDir = dataDir ?? path.join(userDataDir, 'data');
+    this.apiToken = apiToken;
+    this.inheritStdio = inheritStdio;
     this.logPath = path.join(userDataDir, 'backend.log');
     /** @type {import('node:child_process').ChildProcess | null} */
     this.process = null;
@@ -65,10 +79,22 @@ class BackendManager extends EventEmitter {
     }
 
     fs.mkdirSync(this.userDataDir, { recursive: true });
-    const logStream = fs.createWriteStream(this.logPath, { flags: 'a' });
 
-    const header = `\n===== Pythomics backend start @ ${new Date().toISOString()} =====\n`;
-    logStream.write(header);
+    // En desarrollo el stdout/stderr del backend va directo a la terminal
+    // (stdio: 'inherit'): el hijo escribe en el mismo descriptor de archivo
+    // que Electron, así que los logs de uvicorn se ven sin tener que abrir
+    // un tail del archivo. En producción no hay terminal, y además el log
+    // tiene que quedar en disco y disponible por IPC, así que se captura
+    // por un pipe.
+    const inheritStdio = this.inheritStdio;
+    const logStream = inheritStdio
+      ? null
+      : fs.createWriteStream(this.logPath, { flags: 'a' });
+
+    if (logStream) {
+      const header = `\n===== Pythomics backend start @ ${new Date().toISOString()} =====\n`;
+      logStream.write(header);
+    }
 
     const { command, args, source } = this.resolvePythonCommand();
     this.emit('log', {
@@ -81,9 +107,17 @@ class BackendManager extends EventEmitter {
     try {
       proc = spawn(command, args, {
         cwd: this.backendDir,
+        stdio: inheritStdio ? 'inherit' : 'pipe',
         env: {
           ...process.env,
           PYTHONUNBUFFERED: '1', // fuerza flush para ver logs en tiempo real
+          // El backend resuelve su directorio de datos a partir de esta
+          // variable. Sin ella usaría backend/data (repo), que en
+          // producción puede no ser escribible.
+          PYTHOMICS_DATA_DIR: this.dataDir,
+          // Credencial del backend. Viaja por el canal del spawn, no por la
+          // red; el backend la exige en cada petición.
+          PYTHOMICS_API_TOKEN: this.apiToken,
         },
       });
     } catch (err) {
@@ -94,8 +128,13 @@ class BackendManager extends EventEmitter {
 
     this.process = proc;
 
-    proc.stdout.on('data', (chunk) => this._handleStream('stdout', chunk, logStream));
-    proc.stderr.on('data', (chunk) => this._handleStream('stderr', chunk, logStream));
+    // Con stdio: 'inherit' no hay tubería que leer: la salida ya fue a la
+    // terminal. En el modo pipe, cada línea va al archivo de log y se
+    // emite por IPC para que la UI pueda mostrarla.
+    if (logStream) {
+      proc.stdout.on('data', (chunk) => this._handleStream('stdout', chunk, logStream));
+      proc.stderr.on('data', (chunk) => this._handleStream('stderr', chunk, logStream));
+    }
 
     proc.on('exit', (code, signal) => {
       this.emit('exit', { code, signal });
@@ -144,7 +183,9 @@ class BackendManager extends EventEmitter {
         if (Date.now() - start > timeoutMs) {
           return reject(new Error(
             `Backend no respondió en ${timeoutMs}ms (http://127.0.0.1:${this.port}/v1/health). ` +
-            `Revisá el log en: ${this.logPath}`,
+            (this.inheritStdio
+              ? 'Sus logs están en esta terminal.'
+              : `Revisá el log en: ${this.logPath}`),
           ));
         }
 
@@ -154,6 +195,7 @@ class BackendManager extends EventEmitter {
             port: this.port,
             path: '/v1/health',
             timeout: 1000,
+            headers: { 'X-Pythomics-Token': this.apiToken },
           },
           (res) => {
             res.resume();

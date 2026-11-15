@@ -13,11 +13,26 @@
 
 const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('electron');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BackendManager } = require('./backend.cjs');
 
 const isDev = process.env.PYTHOMICS_DEV === '1';
 const BACKEND_PORT = 8501;
+
+/**
+ * Token compartido con el backend local.
+ *
+ * El backend escucha en 127.0.0.1, y eso NO lo vuelve privado: cualquier
+ * pagina web abierta por el usuario puede hacer un POST a
+ * http://127.0.0.1:8501/v1/archivos/ — sin CORS el navegador no le impide
+ * ENVIAR la peticion, solo LEER la respuesta. Con este token, una pagina
+ * ajena no puede enviar esa cabecera (habria que pasar por un preflight que
+ * el backend no responde con headers CORS), asi que no puede escribir.
+ *
+ * El token se pasa al backend por entorno: nunca viaja por la red.
+ */
+const API_TOKEN = crypto.randomBytes(32).toString('hex');
 
 // Esquema propio para servir el bundle de producción.
 //
@@ -289,7 +304,10 @@ function setupIpc() {
     const url = `http://127.0.0.1:${BACKEND_PORT}${apiPath}`;
     const init = {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Pythomics-Token': API_TOKEN,
+      },
     };
     if (body !== undefined && body !== null) {
       init.body = typeof body === 'string' ? body : JSON.stringify(body);
@@ -328,7 +346,7 @@ function setupIpc() {
       // OJO: NO setear Content-Type a mano. fetch lo arma con el boundary
       // correcto; si se define a mano, el boundary queda mal y FastAPI
       // rechaza el archivo.
-      const res = await fetch(url, { method: 'POST', body: form });
+      const res = await fetch(url, { method: 'POST', body: form, headers: { 'X-Pythomics-Token': API_TOKEN } });
       const contentType = res.headers.get('content-type') || '';
       const data = contentType.includes('application/json')
         ? await res.json().catch(() => null)
@@ -346,10 +364,26 @@ app.whenReady().then(() => {
     registerAppProtocol();
   }
 
+  const userDataDir = app.getPath('userData');
+  // El directorio de datos del backend:
+  //   - en desarrollo, dentro del repo (backend/data, gitignorado), para
+  //     poder inspeccionar los archivos subidos;
+  //   - en producción, en el perfil del usuario, que siempre es escribible
+  //     (junto al ejecutable puede no serlo).
+  const dataDir = isDev
+    ? path.join(backendDir, 'data')
+    : path.join(userDataDir, 'data');
+
   backend = new BackendManager({
     backendDir,
     port: BACKEND_PORT,
-    userDataDir: app.getPath('userData'),
+    userDataDir,
+    dataDir,
+    apiToken: API_TOKEN,
+    // En desarrollo el backend escribe sus logs (uvicorn) directamente en
+    // esta terminal, mezclados con los de Vite. En producción no hay
+    // terminal: la salida se captura y queda en el archivo de log.
+    inheritStdio: isDev,
   });
 
   setupIpc();

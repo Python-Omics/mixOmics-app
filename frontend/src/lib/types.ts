@@ -68,11 +68,33 @@ export type Step = 'load' | 'configure' | 'results';
 
 // ─── API expuesta por el preload (window.pyxAPI) ────────────────────────────
 
+/**
+ * Error estructurado que devuelve el backend, dentro del sobre
+ * `{"error": {"code", "message_key", "detail"}}`.
+ *
+ * - `code`: código estable del backend (`E_*`).
+ * - `messageKey`: clave de i18n que el renderer resuelve en sus catálogos.
+ * - `detail`: datos estructurados del error (archivo, IDs duplicados, ...).
+ */
+export type ApiErrorPayload = {
+  code: string;
+  messageKey: string;
+  detail?: Record<string, unknown>;
+};
+
 export type ApiResponse<T = unknown> = {
   ok: boolean;
   status: number;
   data?: T;
   error?: string;
+  /**
+   * Error estructurado del backend, ya normalizado.
+   *
+   * Lo puebla la capa del renderer (`withApiError` en `lib/api.ts`), no el
+   * puente IPC: por eso es opcional y solo aparece cuando la respuesta no
+   * fue OK y el cuerpo trae el sobre del backend.
+   */
+  apiError?: ApiErrorPayload;
 };
 
 /** Response de GET /v1/archivos/ (archivos cargados en el backend). */
