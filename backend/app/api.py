@@ -751,6 +751,19 @@ async def ejecutar_modelo(
             },
         )
 
+    # El DIABLO es supervisado: sin variable de clase no hay nada que
+    # ajustar. Se comprueba acá, antes de encolar, para que el usuario
+    # reciba el error en la respuesta y no en el polling del job.
+    target = payload.target if payload.target is not None else receta.target
+    if payload.model_type == "DIABLO" and target is None:
+        raise PythomicsError(
+            ErrorCode.E_TARGET_COLUMN_MISSING,
+            detail={
+                "reason": "diablo_requires_target",
+                "model_type": payload.model_type,
+            },
+        )
+
     manager: JobManager = request.app.state.JOB_MANAGER
     job_id = manager.create(receta, payload)
     return JobAccepted(job_id=job_id)

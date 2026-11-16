@@ -257,7 +257,7 @@ function buildErrorMessage(
 }
 
 export function LoadPage({ onNext }: Props) {
-  const { state, addFile, removeFile, setModelConfig } = useProject();
+  const { state, addFile, removeFile, setFileRole, setModelConfig } = useProject();
   const [status, setStatus] = useState<{ kind: 'info' | 'warn' | 'error'; text: string } | null>(null);
   const t = useTranslate();
   const intl = useIntl();
@@ -449,6 +449,32 @@ export function LoadPage({ onNext }: Props) {
                   })}
                 </p>
               </div>
+
+              {/*
+                Control de rol: el usuario decide si el archivo aporta
+                variables al modelo o si es la tabla de metadata del estudio.
+                El rol NO lo deduce el dtype (ver `FileRole` en
+                `lib/project-state.tsx`): una tabla de metadata puede tener
+                todas sus columnas numéricas.
+
+                `aria-pressed` comunica si el archivo está marcado como tabla
+                de metadata; la etiqueta dice la acción disponible.
+              */}
+              <button
+                type="button"
+                className="btn-secondary"
+                aria-pressed={file.role === 'metadata'}
+                onClick={() =>
+                  setFileRole(
+                    file.filename,
+                    file.role === 'metadata' ? 'block' : 'metadata',
+                  )
+                }
+              >
+                {file.role === 'metadata'
+                  ? t('ingest.markAsBlock')
+                  : t('ingest.markAsMetadata')}
+              </button>
 
               {file.warnings && file.warnings.length > 0 && (
                 <div className="rounded border border-amber-200 bg-amber-50 p-3">

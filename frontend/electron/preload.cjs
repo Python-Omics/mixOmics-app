@@ -78,6 +78,11 @@ contextBridge.exposeInMainWorld('pyxAPI', {
       }
       return ipcRenderer.invoke('api:upload', { path, filename, content });
     },
+    // Figuras: el renderer pide el PNG de un job y arma un `blob:` URL con
+    // el base64 que vuelve. El token compartido NO llega al renderer: lo
+    // usa el proceso main, que es el único que conoce el puerto.
+    getFigure: (jobId, name) =>
+      ipcRenderer.invoke('api:file', { jobId, name }),
   },
 
   // --- Streams del subproceso ---

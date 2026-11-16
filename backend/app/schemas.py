@@ -91,17 +91,26 @@ class Figure(BaseModel):
     kind: str = Field(
         ...,
         description=(
-            "Tipo de figura: 'pca', 'cim', 'circos', 'biomarkers', etc. "
-            "El renderer decide cómo presentarla a partir de este valor."
+            "Tipo de figura: 'pca', 'biomarkers', 'circos', 'cim', etc. "
+            "El renderer decide cómo presentarla a partir de este valor. "
+            "'pca' es el sample plot del PCA; 'biomarkers' es el loading "
+            "plot y 'circos' el círculo de correlaciones del DIABLO."
         ),
     )
     path: str = Field(
         ...,
-        description="Ruta de la figura relativa al directorio del job.",
+        description=(
+            "Ruta de la figura relativa al directorio del job "
+            "(por ejemplo 'scores_gene.png')."
+        ),
     )
     name: str = Field(
         ...,
-        description="Nombre del archivo de la figura (sin directorio).",
+        description=(
+            "Nombre de la figura, sin directorio ni extensión "
+            "(por ejemplo 'scores_gene'). Es el nombre que se pide en "
+            "GET /v1/files/{job_id}/{name}.png."
+        ),
     )
     mime: str = Field(
         default="image/png",
@@ -675,18 +684,27 @@ class ModelRequest(BaseModel):
     )
     keepX: dict[str, list[int]] | None = Field(
         default=None,
-        description="Variables a conservar por bloque, con la convención de mixOmics.",
+        description=(
+            "Variables a conservar por bloque, con la convención de mixOmics: "
+            "una lista por bloque con un valor por componente. El worker "
+            "exige que la lista tenga tantos elementos como componentes."
+        ),
     )
     design: list[list[float]] | None = Field(
         default=None,
         description=(
             "Matriz de diseño p×p de DIABLO. Si no viene, el worker usa el "
-            "default de mixOmics."
+            "default de mixOmics (ceros en la diagonal y unos en el resto) "
+            "y lo registra en la provenance."
         ),
     )
     target: TargetSpec | None = Field(
         default=None,
-        description="Variable de clase (bloque + columna) para modelos supervisados.",
+        description=(
+            "Variable de clase (bloque + columna) para modelos supervisados. "
+            "El DIABLO la exige: sin ella la solicitud se rechaza con "
+            "E_TARGET_COLUMN_MISSING."
+        ),
     )
     seed: int | None = Field(
         default=None,
@@ -700,6 +718,34 @@ class ModelRequest(BaseModel):
 # ------------------------------------------------------------------------------
 # Resultado y trazabilidad
 # ------------------------------------------------------------------------------
+
+
+class DataFileFingerprint(BaseModel):
+    """Identidad de un archivo de datos que entró al análisis (RB-7).
+
+    La huella liga el resultado con el archivo **exacto** que se usó: si el
+    archivo cambia en disco, la huella cambia y se nota que el resultado es
+    de otra corrida.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    name: str = Field(
+        ...,
+        description="Nombre del archivo de datos (por ejemplo 'nutrimouse_gene.csv').",
+    )
+    role: str = Field(
+        default="block",
+        description="Rol del bloque: 'block' (variables) o 'metadata' (anotaciones).",
+    )
+    sha256: str = Field(
+        ...,
+        description="Huella SHA-256 del contenido del archivo.",
+    )
+    size_bytes: int = Field(
+        ...,
+        description="Tamaño del archivo en bytes.",
+    )
 
 
 class Provenance(BaseModel):
@@ -730,6 +776,21 @@ class Provenance(BaseModel):
     preprocessing: list[PreprocessingStep] = Field(
         default_factory=list,
         description="Receta de preprocesamiento efectivamente aplicada.",
+    )
+    data_files: list[DataFileFingerprint] = Field(
+        default_factory=list,
+        description=(
+            "Huella de los archivos de datos que entraron al análisis, "
+            "en el orden de la receta."
+        ),
+    )
+    data_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "Huella SHA-256 que resume todos los archivos de datos. "
+            "Es igual en dos corridas que usaron exactamente los mismos "
+            "archivos, y distinta en cuanto uno cambia."
+        ),
     )
     created_at: str = Field(
         ...,
@@ -770,11 +831,21 @@ class ModelResult(BaseModel):
     )
     biomarkers: list[Biomarker] = Field(
         default_factory=list,
-        description="Biomarcadores seleccionados, con su estabilidad.",
+        description=(
+            "Biomarcadores seleccionados, con su estabilidad. "
+            "En el DIABLO son las variables que el modelo eligió en cada "
+            "bloque y en cada componente."
+        ),
     )
     correlations: dict[str, list[list[float]]] = Field(
         default_factory=dict,
-        description="Matrices de correlación entre bloques, indexadas por par.",
+        description=(
+            "Matrices de correlación entre bloques, indexadas por par. "
+            "La clave es 'bloqueA|bloqueB', con los bloques en el orden de "
+            "la receta, y la matriz es la correlación entre los variates "
+            "de cada bloque (una fila por componente de A, una columna por "
+            "componente de B)."
+        ),
     )
     figures: list[Figure] = Field(
         default_factory=list,

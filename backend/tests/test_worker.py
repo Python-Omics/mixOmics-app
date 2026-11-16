@@ -45,7 +45,7 @@ def test_el_worker_registra_las_etapas_en_orden(
     monkeypatch.setattr(
         worker,
         "_build_result",
-        lambda fitted, *, n_components, seed: resultado,
+        lambda fitted, *, n_components, seed, bloques=None, target=None: resultado,
     )
 
     spec = worker.JobSpec.model_validate(

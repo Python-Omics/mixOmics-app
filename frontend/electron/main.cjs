@@ -6,9 +6,14 @@
  * Responsabilidades:
  *   - Crear BrowserWindow con sandbox/contextIsolation seguros.
  *   - Antes de mostrar la UI, levantar el backend FastAPI local.
- *   - Exponer IPC handlers (api:request, api:upload, backend:status,
- *     backend:restart) y forward de logs del subproceso al renderer.
+ *   - Exponer IPC handlers (api:request, api:upload, api:file,
+ *     backend:status, backend:restart) y forward de logs del subproceso al
+ *     renderer.
  *   - Cleanup: matar el subproceso al cerrar la ventana.
+ *
+ * Frontera de seguridad: el renderer NUNCA habla con el puerto del backend.
+ * Todo pasa por el puente IPC, y el token compartido vive acá (en el
+ * proceso main), nunca en el renderer.
  */
 
 const { app, BrowserWindow, ipcMain, shell, dialog, protocol, net } = require('electron');
@@ -36,6 +41,43 @@ const BACKEND_PORT = 8501;
  * El token se pasa al backend por entorno: nunca viaja por la red.
  */
 const API_TOKEN = crypto.randomBytes(32).toString('hex');
+
+/**
+ * Valida un identificador de job antes de construir una URL con él.
+ *
+ * Los identificadores que genera el backend son `job_` + hexadecimal, así
+ * que el patrón es cerrado a propósito: un identificador con separadores o
+ * con `..` no llega nunca a la red.
+ *
+ * @param {unknown} valor
+ * @returns {boolean}
+ */
+function identificadorSeguro(valor) {
+  return (
+    typeof valor === 'string' &&
+    valor.length > 0 &&
+    valor.length <= 128 &&
+    /^[A-Za-z0-9_-]+$/.test(valor)
+  );
+}
+
+/**
+ * Valida el nombre de una figura antes de construir una URL con él.
+ *
+ * El nombre va al path de la URL (`/v1/files/{job_id}/{name}.png`), así que
+ * no puede traer separadores ni `..`: el traversal se corta acá, antes de
+ * tocar la red. El backend también valida, pero la defensa va en la
+ * frontera que arma la URL.
+ *
+ * @param {unknown} valor
+ * @returns {boolean}
+ */
+function nombreFiguraSeguro(valor) {
+  if (typeof valor !== 'string') return false;
+  if (valor.length === 0 || valor.length > 255) return false;
+  if (valor.includes('..')) return false;
+  return /^[A-Za-z0-9._-]+$/.test(valor);
+}
 
 // Esquema propio para servir el bundle de producción.
 //
@@ -143,6 +185,261 @@ function checkLogRotation() {
 }
 
 /**
+ * Verifica el canal de figuras (`api:file`).
+ *
+ * El renderer nunca habla con el puerto del backend: pide la figura por el
+ * puente IPC y el proceso main la baja con el token compartido. El nombre
+ * de la figura va a una URL, así que se valida ANTES de construirla: nada
+ * de traversal ni de separadores de ruta.
+ *
+ * La comprobación no necesita el backend: un nombre inválido se rechaza en
+ * el proceso main, sin tocar la red.
+ *
+ * @returns {Promise<boolean>} - true si el canal existe y valida el nombre.
+ */
+async function checkFigureChannel() {
+  try {
+    const res = await mainWindow.webContents.executeJavaScript(
+      "window.pyxAPI.api.getFigure('job_prueba', '../../etc/passwd')",
+    );
+    // Rechazo local: status 0 (no hubo petición) y un mensaje de error.
+    return Boolean(res && res.ok === false && res.status === 0 && res.error);
+  } catch (err) {
+    console.error('[smoke] el canal de figuras no respondió:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Verifica el camino feliz del canal de figuras: una figura real la baja el
+ * proceso main con el token compartido y vuelve al renderer como base64.
+ *
+ * La cadena completa es la del contrato (S27): subida del bloque, receta,
+ * alineación confirmada, job, polling, figura por `api:file` y `blob:` URL
+ * en el renderer.
+ *
+ * OJO: la CSP de `index.html` tiene `img-src 'self' data:`, y eso bloquea
+ * los `blob:` URL (Chromium: "Refused to load the image 'blob:...'"). Por eso
+ * esta comprobación NO carga la imagen en un `<img>`: verificaría la CSP, no
+ * el canal. La CSP tiene que admitir `blob:` para que la pantalla de
+ * resultados pueda mostrar las figuras.
+ *
+ * @returns {Promise<'ok'|'skip'|'fail'>} - `skip` si el backend no está.
+ */
+async function checkFigureRoundTrip() {
+  const listo = await esperarBackend(60);
+  if (!listo) {
+    console.error('[smoke] el backend no respondió: no se prueba la figura');
+    return 'skip';
+  }
+
+  const headers = { 'X-Pythomics-Token': API_TOKEN };
+  const base = `http://127.0.0.1:${BACKEND_PORT}`;
+
+  // 1) Un bloque mínimo, subido desde un directorio temporal.
+  const temporal = fs.mkdtempSync(path.join(os.tmpdir(), 'pythomics-figura-'));
+  const csv = path.join(temporal, 'bloque.csv');
+  fs.writeFileSync(
+    csv,
+    ['sample,v1,v2,v3,v4']
+      .concat(
+        Array.from({ length: 8 }, (_, fila) =>
+          [fila + 1, fila * 1.5, fila * -0.5, fila * 0.25, fila % 3].join(','),
+        ),
+      )
+      .join('\n'),
+  );
+
+  let idReceta = null;
+  let jobId = null;
+
+  try {
+    const form = new FormData();
+    const blob = await openAsBlob(csv, { type: 'text/csv' });
+    form.append('file', blob, 'bloque.csv');
+    const subida = await fetch(`${base}/v1/archivos/`, {
+      method: 'POST',
+      body: form,
+      headers,
+    });
+    if (!subida.ok) {
+      console.error(
+        '[smoke] no se pudo subir el bloque:',
+        subida.status,
+        await subida.text(),
+      );
+      return 'fail';
+    }
+
+    // 2) La receta.
+    const receta = await fetch(`${base}/v1/datasets/`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: [{ name: 'bloque.csv', role: 'block' }] }),
+    });
+    if (!receta.ok) {
+      console.error('[smoke] no se pudo crear la receta:', receta.status);
+      return 'fail';
+    }
+    idReceta = (await receta.json()).id;
+
+    // 2b) La alineación, confirmada explícitamente por el usuario (RF-2).
+    const alineacion = await fetch(`${base}/v1/datasets/${idReceta}/align/`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ blocks: ['bloque.csv'], confirmed: true }),
+    });
+    if (!alineacion.ok) {
+      console.error('[smoke] no se pudo alinear:', alineacion.status);
+      return 'fail';
+    }
+
+    // 3) El job.
+    const modelo = await fetch(`${base}/v1/model/`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dataset_id: idReceta,
+        model_type: 'PCA',
+        n_components: 2,
+        seed: 7,
+      }),
+    });
+    if (!modelo.ok) {
+      console.error('[smoke] no se pudo encolar el job:', modelo.status);
+      return 'fail';
+    }
+    jobId = (await modelo.json()).job_id;
+
+    // 4) El polling, hasta que el job termine.
+    let job = null;
+    for (let intento = 0; intento < 120; intento += 1) {
+      const consulta = await fetch(`${base}/v1/jobs/${jobId}/`, { headers });
+      job = await consulta.json();
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!job || job.status !== 'completed') {
+      console.error(
+        '[smoke] el job no terminó:',
+        job && job.status,
+        JSON.stringify(job && job.error),
+      );
+      return 'fail';
+    }
+    const figura = job.result.figures[0];
+    if (!figura) {
+      console.error('[smoke] el job no produjo figuras');
+      return 'fail';
+    }
+
+    // 5) La figura por el canal `api:file` y el blob: URL en el renderer.
+    const porCanal = await mainWindow.webContents.executeJavaScript(
+      `window.pyxAPI.api.getFigure(${JSON.stringify(jobId)}, ${JSON.stringify(figura.name)})`,
+    );
+    if (!porCanal || !porCanal.ok || !porCanal.data) {
+      console.error('[smoke] el canal de figuras no devolvió la figura');
+      return 'fail';
+    }
+    const base64 = porCanal.data.dataBase64;
+    if (!base64 || !base64.startsWith('iVBOR')) {
+      console.error('[smoke] la figura no es un PNG válido');
+      return 'fail';
+    }
+    const blobUrl = await mainWindow.webContents.executeJavaScript(
+      `(() => { const bin = atob(${JSON.stringify(base64)}); ` +
+        `const bytes = new Uint8Array(bin.length); ` +
+        `for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i); ` +
+        `return URL.createObjectURL(new Blob([bytes], { type: 'image/png' })); })()`,
+    );
+    if (!blobUrl || !blobUrl.startsWith('blob:')) {
+      console.error('[smoke] el renderer no pudo armar el blob: URL');
+      return 'fail';
+    }
+
+    // 5b) La imagen se carga de verdad en el renderer. Esto es lo que
+    // atrapa una CSP que no permita los blob: URL: el `img.onerror` salta
+    // y la figura nunca se ve, aunque el canal funcione.
+    const imagenCarga = await mainWindow.webContents.executeJavaScript(
+      `new Promise((resolve) => {
+         const img = new Image();
+         img.onload = () => resolve(img.naturalWidth > 0);
+         img.onerror = () => resolve(false);
+         img.src = ${JSON.stringify(blobUrl)};
+       })`,
+    );
+    if (!imagenCarga) {
+      console.error('[smoke] el renderer no pudo cargar la imagen blob:');
+      return 'fail';
+    }
+
+    console.log(
+      `[smoke] figura del job ${jobId}: ${figura.name} ` +
+        `(${base64.length} bytes base64)`,
+    );
+    return 'ok';
+  } finally {
+    // El smoke no deja basura: borra el archivo, la receta y el job.
+    await limpiarPrueba(base, headers, idReceta, jobId);
+    fs.rmSync(temporal, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Borra lo que el smoke creó en el backend: el archivo, la receta y el
+ * directorio del job.
+ *
+ * @param {string} base
+ * @param {Record<string, string>} headers
+ * @param {string | null} idReceta
+ * @param {string | null} jobId
+ * @returns {Promise<void>}
+ */
+async function limpiarPrueba(base, headers, idReceta, jobId) {
+  try {
+    await fetch(`${base}/v1/archivos/?nombre_archivo=bloque.csv`, {
+      method: 'DELETE',
+      headers,
+    });
+    if (idReceta) {
+      await fetch(`${base}/v1/datasets/${idReceta}/`, {
+        method: 'DELETE',
+        headers,
+      });
+    }
+    if (jobId && backendDataDir) {
+      fs.rmSync(path.join(backendDataDir, 'jobs', jobId), {
+        recursive: true,
+        force: true,
+      });
+    }
+  } catch (err) {
+    console.error('[smoke] no se pudo limpiar la prueba:', err.message);
+  }
+}
+
+/**
+ * Espera a que el backend responda el healthcheck.
+ *
+ * @param {number} intentos
+ * @returns {Promise<boolean>}
+ */
+async function esperarBackend(intentos) {
+  for (let i = 0; i < intentos; i += 1) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${BACKEND_PORT}/v1/health`, {
+        headers: { 'X-Pythomics-Token': API_TOKEN },
+      });
+      if (res.ok) return true;
+    } catch {
+      // todavia no esta levantado
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+
+/**
  * Smoke de producción.
  *
  * Con PYTHOMICS_SMOKE=1 la app arranca contra el build compilado, verifica
@@ -187,7 +484,20 @@ function setupSmokeCheck() {
       ['el tema se aplicó', Boolean(info && info.theme)],
       ['sin violaciones de CSP', violations.length === 0],
       ['el log se rota al superar el tope', checkLogRotation()],
+      ['el canal de figuras valida el nombre', await checkFigureChannel()],
     ];
+
+    // El camino feliz de las figuras necesita el backend: si no está, la
+    // comprobación se omite (y se dice) en vez de dar un falso negativo.
+    const figura = await checkFigureRoundTrip();
+    if (figura === 'skip') {
+      console.log(
+        '[smoke] OMITIDA  el canal de figuras entrega la figura (el backend no respondió)',
+      );
+    } else {
+      checks.push(['el canal de figuras entrega la figura', figura === 'ok']);
+    }
+
     if (!isDev) {
       checks.push([
         'origen real app:// (no file:// opaco)',
@@ -205,6 +515,10 @@ function setupSmokeCheck() {
       console.error('[smoke] violacion CSP:', v);
     }
 
+    // El backend se detiene antes de salir: si queda vivo, ocupa el puerto
+    // 8501 y la próxima corrida del smoke no puede arrancar el suyo.
+    if (backend) await backend.stop();
+
     app.exit(ok ? 0 : 1);
   });
 }
@@ -212,6 +526,14 @@ function setupSmokeCheck() {
 let mainWindow = null;
 /** @type {BackendManager | null} */
 let backend = null;
+/**
+ * Directorio de datos del backend.
+ *
+ * Lo usa el smoke para borrar el directorio del job de prueba: es el
+ * directorio del propio backend (`<data>/jobs/<job_id>`), no un dato del
+ * usuario.
+ */
+let backendDataDir = null;
 
 /**
  * Sirve dist/ bajo app://pythomics/.
@@ -417,6 +739,58 @@ function setupIpc() {
       return { ok: false, status: 0, error: err.message };
     }
   });
+
+  // Canal de las figuras (S27).
+  //
+  // `api:request` devuelve JSON o texto: una figura es binaria, así que
+  // viaja por su propio canal. El proceso main es el único que conoce el
+  // puerto y el token compartido; el renderer solo recibe el PNG en base64
+  // y arma un `blob:` URL con él.
+  ipcMain.handle('api:file', async (_event, payload) => {
+    const jobId = (payload && payload.jobId) || '';
+    const name = (payload && payload.name) || '';
+
+    // El nombre va a una URL: se valida antes de construirla.
+    if (!identificadorSeguro(jobId) || !nombreFiguraSeguro(name)) {
+      return {
+        ok: false,
+        status: 0,
+        error: 'identificador de job o nombre de figura inválido',
+      };
+    }
+
+    const url =
+      `http://127.0.0.1:${BACKEND_PORT}` +
+      `/v1/files/${encodeURIComponent(jobId)}/${encodeURIComponent(name)}.png`;
+
+    try {
+      const res = await fetch(url, {
+        headers: { 'X-Pythomics-Token': API_TOKEN },
+      });
+      const contentType = res.headers.get('content-type') || '';
+
+      if (!res.ok) {
+        // El backend responde el sobre de error en JSON: se reenvía tal
+        // cual para que el renderer lo traduzca por `message_key`.
+        const data = contentType.includes('application/json')
+          ? await res.json().catch(() => null)
+          : await res.text();
+        return { ok: false, status: res.status, data };
+      }
+
+      const buffer = Buffer.from(await res.arrayBuffer());
+      return {
+        ok: true,
+        status: res.status,
+        data: {
+          mime: contentType || 'image/png',
+          dataBase64: buffer.toString('base64'),
+        },
+      };
+    } catch (err) {
+      return { ok: false, status: 0, error: err.message };
+    }
+  });
 }
 
 app.whenReady().then(() => {
@@ -434,6 +808,7 @@ app.whenReady().then(() => {
   const dataDir = isDev
     ? path.join(backendDir, 'data')
     : path.join(userDataDir, 'data');
+  backendDataDir = dataDir;
 
   backend = new BackendManager({
     backendDir,

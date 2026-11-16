@@ -6,10 +6,16 @@ import { fileURLToPath } from 'node:url';
 import type {
   ApiCallRecord,
   ApiResponse,
+  JobError,
+  ProgressStage,
   PyxAPI,
   UploadResponse,
 } from '../../src/lib/types';
-import { installApiMock } from '../../playwright.config';
+import {
+  installApiMock,
+  MOCK_DATASET_ID,
+  MOCK_JOB_ID,
+} from '../../playwright.config';
 import es from '../../src/i18n/es.json' with { type: 'json' };
 import en from '../../src/i18n/en.json' with { type: 'json' };
 
@@ -49,6 +55,13 @@ type TestFixtures = {
    * Permite simular un bloque categórico (tabla de metadata).
    */
   block: Partial<UploadResponse['block']> | undefined;
+  /**
+   * Etapas por las que pasa el job en cada consulta de polling.
+   * Sin valor, el mock recorre el ciclo completo del pipeline.
+   */
+  jobStages: ProgressStage[] | undefined;
+  /** Si viene, el job termina en `failed` con ese error. */
+  jobError: JobError | undefined;
 };
 
 const test = base.extend<TestFixtures>({
@@ -56,6 +69,12 @@ const test = base.extend<TestFixtures>({
     await use(undefined);
   },
   block: async ({}, use) => {
+    await use(undefined);
+  },
+  jobStages: async ({}, use) => {
+    await use(undefined);
+  },
+  jobError: async ({}, use) => {
     await use(undefined);
   },
 });
@@ -196,8 +215,13 @@ const UNKNOWN_WARNING_RESPONSE: ApiResponse<UploadResponse> = {
  * navegación: el init script se aplica a los documentos que se carguen
  * después de instalarlo.
  */
-test.beforeEach(async ({ page, uploadResponse, block }) => {
-  await page.addInitScript(installApiMock, { uploadResponse, block });
+test.beforeEach(async ({ page, uploadResponse, block, jobStages, jobError }) => {
+  await page.addInitScript(installApiMock, {
+    uploadResponse,
+    block,
+    jobStages,
+    jobError,
+  });
 });
 
 /**
@@ -1135,6 +1159,264 @@ test.describe('Rutas contra el backend real', () => {
 });
 
 /**
+ * Rol del archivo en el proyecto (`block` ↔ `metadata`).
+ *
+ * El usuario decide si el archivo que sube aporta variables al modelo o si
+ * es la tabla de metadata (fenotipo). El rol NO lo deduce el dtype: una
+ * tabla de metadata puede tener todas sus columnas numéricas.
+ *
+ * Cuando el rol cambia, la receta guardada en el backend queda vieja: el
+ * identificador de la receta se limpia para que la próxima visita a
+ * Configurar cree una receta nueva con los roles correctos.
+ */
+test.describe('Rol del archivo en el proyecto', () => {
+  /** Cuenta las recetas creadas (POST /v1/datasets/). */
+  async function countRecipes(page: Page): Promise<number> {
+    return (await readApiCalls(page)).filter(
+      (c) => c.method === 'POST' && c.path === '/v1/datasets/',
+    ).length;
+  }
+
+  /** Bodies de las recetas creadas, en orden. */
+  async function recipeBodies(page: Page): Promise<unknown[]> {
+    return (await readApiCalls(page))
+      .filter((c) => c.method === 'POST' && c.path === '/v1/datasets/')
+      .map((c) => c.body);
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+
+  test('el usuario marca un archivo subido como tabla de metadata', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    // Al principio es un bloque de variables: no lleva la etiqueta de metadata.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+
+    const marcar = page.getByRole('button', {
+      name: es['ingest.markAsMetadata'],
+    });
+    await expect(marcar).toBeVisible();
+    await marcar.click();
+
+    // Aparece la etiqueta de metadata del estudio.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toBeVisible();
+
+    // Y el control ofrece la acción contraria.
+    await expect(
+      page.getByRole('button', { name: es['ingest.markAsBlock'] }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: es['ingest.markAsMetadata'] }),
+    ).toHaveCount(0);
+  });
+
+  test('el usuario devuelve el archivo al rol de bloque de variables', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    await page
+      .getByRole('button', { name: es['ingest.markAsMetadata'] })
+      .click();
+    await expect(page.getByText(es['ingest.metadataBlock'])).toBeVisible();
+
+    await page.getByRole('button', { name: es['ingest.markAsBlock'] }).click();
+
+    // La etiqueta de metadata desaparece.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: es['ingest.markAsMetadata'] }),
+    ).toBeVisible();
+  });
+
+  test('el control de rol es un botón real, con foco y activable con teclado', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    const marcar = page.getByRole('button', {
+      name: es['ingest.markAsMetadata'],
+    });
+    // `aria-pressed` comunica que el archivo todavía NO es metadata.
+    await expect(marcar).toHaveAttribute('aria-pressed', 'false');
+
+    await marcar.focus();
+    await expect(marcar).toBeFocused();
+
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByText(es['ingest.metadataBlock'])).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: es['ingest.markAsBlock'] }),
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('cambiar el rol limpia la receta guardada y crea una receta nueva', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    // Primera visita a Configurar: la receta se crea con el rol inicial.
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+    await expect.poll(() => countRecipes(page)).toBe(1);
+    expect(await recipeBodies(page)).toEqual([
+      { blocks: [{ name: 'demo.csv', role: 'block' }] },
+    ]);
+
+    // Vuelta a la pantalla de carga para cambiar el rol del archivo.
+    await page.getByRole('button', { name: es['nav.load'] }).click();
+    await expect(page.getByText(es['topbar.step.load'])).toBeVisible();
+    await page
+      .getByRole('button', { name: es['ingest.markAsMetadata'] })
+      .click();
+    await expect(page.getByText(es['ingest.metadataBlock'])).toBeVisible();
+
+    // Nueva visita a Configurar: la receta vieja quedó obsoleta, así que se
+    // crea una nueva con el rol correcto.
+    await page.getByRole('button', { name: es['nav.configure'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+    await expect.poll(() => countRecipes(page)).toBe(2);
+    expect(await recipeBodies(page)).toEqual([
+      { blocks: [{ name: 'demo.csv', role: 'block' }] },
+      { blocks: [{ name: 'demo.csv', role: 'metadata' }] },
+    ]);
+  });
+
+  test('sin cambiar el rol la receta se recupera, no se crea otra', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+    await expect.poll(() => countRecipes(page)).toBe(1);
+
+    // Ida y vuelta a la pantalla de carga, sin tocar el rol.
+    await page.getByRole('button', { name: es['nav.load'] }).click();
+    await expect(page.getByText(es['topbar.step.load'])).toBeVisible();
+    await page.getByRole('button', { name: es['nav.configure'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+
+    // La receta existente se recupera (GET), no se crea otra (POST).
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter(
+            (c) => c.method === 'GET' && c.path.startsWith('/v1/datasets/'),
+          ).length,
+      )
+      .toBeGreaterThan(0);
+    expect(await countRecipes(page)).toBe(1);
+  });
+
+  test('el control de rol se muestra traducido en inglés', async ({ page }) => {
+    await seedLocale(page, 'en');
+    await page.goto('/');
+    await page.getByRole('button', { name: en['home.cta'] }).click();
+    await uploadCsv(page, 'demo.csv');
+
+    await expect(
+      page.getByRole('button', { name: en['ingest.markAsMetadata'] }),
+    ).toBeVisible();
+
+    await page
+      .getByRole('button', { name: en['ingest.markAsMetadata'] })
+      .click();
+
+    await expect(
+      page.getByRole('button', { name: en['ingest.markAsBlock'] }),
+    ).toBeVisible();
+    await expect(page.getByText(en['ingest.metadataBlock'])).toBeVisible();
+  });
+
+  test('cambiar el rol de un archivo no toca el rol de los demás', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+    await uploadCsv(page, 'demo2.csv');
+
+    // Cada archivo tiene su propio resumen: se localizan por el nombre del
+    // bloque (el encabezado), no por el texto del botón.
+    const seccion = (nombre: string) =>
+      page
+        .getByRole('region', { name: es['ingest.summaryTitle'] })
+        .filter({
+          has: page.getByRole('heading', { name: nombre, exact: true }),
+        });
+
+    await seccion('demo.csv')
+      .getByRole('button', { name: es['ingest.markAsMetadata'] })
+      .click();
+
+    await expect(
+      seccion('demo.csv').getByText(es['ingest.metadataBlock']),
+    ).toBeVisible();
+    await expect(
+      seccion('demo2.csv').getByText(es['ingest.metadataBlock']),
+    ).toHaveCount(0);
+  });
+
+  test('el control de rol también funciona con la tabla de metadata de un dataset de ejemplo', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await mockNutrimouseAssets(page);
+
+    await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
+    await page
+      .getByRole('button', { name: msg('datasets.loadLabel', { name: 'nutrimouse' }) })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: es['datasets.title'] }),
+    ).not.toBeVisible();
+
+    // El rol lo declara el catálogo del dataset: solo la tabla de metadata
+    // lo trae.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(1);
+
+    const seccionMeta = page
+      .getByRole('region', { name: es['ingest.summaryTitle'] })
+      .filter({
+        has: page.getByRole('heading', {
+          name: 'nutrimouse_meta.csv',
+          exact: true,
+        }),
+      });
+    await seccionMeta
+      .getByRole('button', { name: es['ingest.markAsBlock'] })
+      .click();
+
+    // Al volver a ser un bloque de variables, la etiqueta desaparece.
+    await expect(page.getByText(es['ingest.metadataBlock'])).toHaveCount(0);
+
+    // Y la receta se crea con los roles actualizados.
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+    await expect.poll(() => countRecipes(page)).toBe(1);
+    expect(await recipeBodies(page)).toEqual([
+      {
+        blocks: [
+          { name: 'nutrimouse_gene.csv', role: 'block' },
+          { name: 'nutrimouse_lipid.csv', role: 'block' },
+          { name: 'nutrimouse_meta.csv', role: 'block' },
+        ],
+      },
+    ]);
+  });
+});
+
+/**
  * Internacionalización.
  *
  * La UI es bilingüe (es/en) y la preferencia vive en
@@ -1704,3 +1986,503 @@ test.describe('Guardián de i18n', () => {
     ).toBe(0);
   });
 });
+
+/**
+ * Configurar y ejecutar contra el contrato real del backend (T10).
+ *
+ * La pantalla Configurar tiene tres secciones (L23): dataset, alineación y
+ * modelo. El flujo es el que exige el backend: crear la receta, calcular la
+ * alineación, confirmarla, fijar la variable de clase y encolar el modelo.
+ * El job se consulta por polling y su resultado se muestra en la pantalla de
+ * resultados.
+ */
+test.describe('Configurar y ejecutar contra el contrato real', () => {
+  // El job termina en la segunda consulta: los tests que no necesitan ver el
+  // progreso no esperan.
+  test.use({ jobStages: ['queued'] });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+
+  /** Sube un bloque y llega a la pantalla de configuración. */
+  async function gotoConfigure(page: Page) {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+  }
+
+  /** Espera a que la receta esté creada y devuelve las llamadas registradas. */
+  async function waitForDataset(page: Page): Promise<ApiCallRecord[]> {
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter((c) => c.path === '/v1/datasets/')
+            .length,
+      )
+      .toBe(1);
+    return readApiCalls(page);
+  }
+
+  /** Confirma la alineación y espera el POST de confirmación. */
+  async function confirmAlignment(page: Page, bloques = ['demo.csv']) {
+    await page.getByRole('button', { name: es['configure.alignmentConfirm'] }).click();
+    await expect
+      .poll(async () => {
+        const aligns = (await readApiCalls(page)).filter((c) =>
+          c.path.includes('/align/'),
+        );
+        return aligns[aligns.length - 1]?.body;
+      })
+      .toEqual({ blocks: bloques, confirmed: true });
+  }
+
+  /** Encola el modelo y espera a llegar a la pantalla de resultados. */
+  async function runModel(page: Page) {
+    const ejecutar = page.getByRole('button', { name: es['configure.run'] });
+    await expect(ejecutar).toBeEnabled();
+    await ejecutar.click();
+    await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
+  }
+
+  test('crea la receta con los bloques del proyecto y calcula la alineación', async ({
+    page,
+  }) => {
+    await gotoConfigure(page);
+
+    const calls = await waitForDataset(page);
+    const create = calls.find((c) => c.path === '/v1/datasets/');
+    // La receta se crea UNA vez: el rol lo declara el origen del archivo.
+    expect(create?.body).toEqual({
+      blocks: [{ name: 'demo.csv', role: 'block' }],
+    });
+
+    // La alineación se calcula sola, sin confirmar.
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter((c) => c.path.includes('/align/'))
+            .length,
+      )
+      .toBe(1);
+    const align = (await readApiCalls(page)).find((c) =>
+      c.path.includes('/align/'),
+    );
+    expect(align?.body).toEqual({ blocks: ['demo.csv'], confirmed: false });
+
+    // La sección DATASET muestra el bloque con su forma.
+    const seccionDataset = page.getByRole('region', {
+      name: es['configure.datasetTitle'],
+    });
+    await expect(
+      page.getByRole('heading', { name: es['configure.datasetTitle'] }),
+    ).toBeVisible();
+    await expect(
+      seccionDataset.getByText('demo.csv', { exact: true }),
+    ).toBeVisible();
+    await expect(
+      seccionDataset.getByText(
+        msg('ingest.dimensions', { samples: 2, variables: 1 }),
+      ),
+    ).toBeVisible();
+
+    // Y la sección ALINEACIÓN informa cuántas muestras sobreviven.
+    await expect(
+      page.getByRole('heading', { name: es['configure.alignmentTitle'] }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(msg('configure.alignmentCommon', { count: 1 })),
+    ).toBeVisible();
+  });
+
+  test('la ejecución está bloqueada hasta que el usuario confirma la alineación', async ({
+    page,
+  }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+
+    const ejecutar = page.getByRole('button', { name: es['configure.run'] });
+    await expect(ejecutar).toBeDisabled();
+    await expect(page.getByText(es['configure.alignmentNeedConfirm'])).toBeVisible();
+
+    await confirmAlignment(page);
+
+    await expect(ejecutar).toBeEnabled();
+    await expect(page.getByText(es['configure.alignmentConfirmed'])).toBeVisible();
+  });
+
+  test('ejecuta el modelo contra la receta y navega a los resultados', async ({
+    page,
+  }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+    await confirmAlignment(page);
+    await runModel(page);
+
+    const calls = await readApiCalls(page);
+    const model = calls.find((c) => c.path === '/v1/model/');
+    expect(model?.method).toBe('POST');
+    expect(model?.body).toMatchObject({
+      dataset_id: MOCK_DATASET_ID,
+      model_type: 'PCA',
+      n_components: 2,
+    });
+    // Toda operación aleatoria lleva semilla (RB-6).
+    expect(
+      typeof (model?.body as { seed?: unknown } | undefined)?.seed,
+    ).toBe('number');
+
+    // El job se consulta por polling hasta un estado terminal.
+    await expect
+      .poll(
+        async () =>
+          (await readApiCalls(page)).filter((c) =>
+            c.path.startsWith('/v1/jobs/'),
+          ).length,
+      )
+      .toBeGreaterThan(0);
+  });
+
+  test('el resultado muestra las figuras, los biomarcadores y las correlaciones', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+    await uploadCsv(page, 'demo2.csv');
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+
+    await waitForDataset(page);
+    await confirmAlignment(page, ['demo.csv', 'demo2.csv']);
+    await runModel(page);
+
+    // La figura se pide por el canal de figuras y se muestra como blob: URL.
+    const img = page.getByRole('img');
+    await expect(img).toHaveAttribute('src', /^blob:/);
+    await expect
+      .poll(async () =>
+        (await readApiCalls(page)).some((c) =>
+          c.path.includes(`/v1/files/${MOCK_JOB_ID}/scores_demo.png`),
+        ),
+      )
+      .toBe(true);
+
+    // Los biomarcadores se listan.
+    const tablaBiomarcadores = page.getByRole('region', {
+      name: es['biomarkers.title'],
+    });
+    await expect(
+      page.getByRole('heading', { name: es['biomarkers.title'] }),
+    ).toBeVisible();
+    await expect(
+      tablaBiomarcadores.getByRole('cell', { name: 'feature_1' }),
+    ).toBeVisible();
+
+    // La varianza explicada se muestra.
+    await expect(
+      page.getByRole('heading', { name: es['results.varianceTitle'] }),
+    ).toBeVisible();
+
+    // Los loadings y los scores también: son el resultado numérico del
+    // modelo (RF-4), no solo la tabla de biomarcadores.
+    const seccionLoadings = page.getByRole('region', {
+      name: es['results.loadingsTitle'],
+    });
+    await expect(
+      seccionLoadings.getByRole('cell', { name: 'feature_1' }),
+    ).toBeVisible();
+    const seccionScores = page.getByRole('region', {
+      name: es['results.scoresTitle'],
+    });
+    await expect(seccionScores).toBeVisible();
+    await expect(
+      seccionScores.getByRole('columnheader', { name: 'comp 1' }),
+    ).toBeVisible();
+
+    // Las correlaciones se indexan por par de bloques.
+    const seccionCorrelaciones = page.getByRole('region', {
+      name: es['results.correlationsTitle'],
+    });
+    await expect(
+      page.getByRole('heading', { name: es['results.correlationsTitle'] }),
+    ).toBeVisible();
+    await expect(
+      seccionCorrelaciones.getByText('demo.csv|demo2.csv', { exact: true }),
+    ).toBeVisible();
+
+    // Y la trazabilidad del análisis.
+    const seccionTrazabilidad = page.getByRole('region', {
+      name: es['results.provenanceTitle'],
+    });
+    await expect(
+      page.getByRole('heading', { name: es['results.provenanceTitle'] }),
+    ).toBeVisible();
+    await expect(
+      seccionTrazabilidad.getByText('0.1.0a1', { exact: false }),
+    ).toBeVisible();
+  });
+
+  test('un biomarcador sin estabilidad se muestra sin valor', async ({ page }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+    await confirmAlignment(page);
+    await runModel(page);
+
+    const fila = page
+      .getByRole('region', { name: es['biomarkers.title'] })
+      .getByRole('row', { name: /feature_1/ });
+    await expect(fila).toBeVisible();
+    // `stability` puede venir `null`: la celda muestra el guion largo.
+    // Las columnas son: variable, bloque, componente, loading, estabilidad.
+    await expect(fila.getByRole('cell').nth(4)).toHaveText('—');
+  });
+
+  test('la variable de clase se fija en la receta y viaja en la solicitud', async ({
+    page,
+  }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+
+    await page.getByLabel(es['configure.targetColumnLabel']).selectOption('feature_1');
+
+    await expect
+      .poll(async () => {
+        const calls = await readApiCalls(page);
+        const target = calls.find((c) => c.path.includes('/target/'));
+        return target?.body;
+      })
+      .toEqual({ block: 'demo.csv', column: 'feature_1' });
+
+    await confirmAlignment(page);
+    await runModel(page);
+
+    const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+    expect(model?.body).toMatchObject({
+      target: { block: 'demo.csv', column: 'feature_1' },
+    });
+  });
+
+  test.describe('cancelación', () => {
+    // El job se queda en curso: la cancelación tiene que alcanzarlo antes
+    // de que termine.
+    test.use({
+      jobStages: [
+        'load',
+        'load',
+        'load',
+        'load',
+        'load',
+        'load',
+        'load',
+        'load',
+      ],
+    });
+
+    test('cancelar el análisis deja el job en estado cancelado', async ({
+      page,
+    }) => {
+      await gotoConfigure(page);
+      await waitForDataset(page);
+      await confirmAlignment(page);
+      await runModel(page);
+
+      await page.getByRole('button', { name: es['results.cancel'] }).click();
+
+      await expect(page.getByText(es['results.cancelled'])).toBeVisible();
+      const deleteCalls = (await readApiCalls(page)).filter(
+        (c) => c.method === 'DELETE' && c.path.startsWith('/v1/jobs/'),
+      );
+      expect(deleteCalls.length).toBe(1);
+      expect(deleteCalls[0].path).toBe(`/v1/jobs/${MOCK_JOB_ID}/`);
+    });
+  });
+
+  test.describe('job fallido', () => {
+    // El backend responde con el sobre de error uniforme.
+    test.use({
+      jobError: {
+        code: 'E_ANALYSIS_FAILED',
+        message_key: 'errors.analysisFailed',
+        detail: {},
+      },
+    });
+
+    test('un job fallido muestra el error traducido del backend', async ({
+      page,
+    }) => {
+      await gotoConfigure(page);
+      await waitForDataset(page);
+      await confirmAlignment(page);
+      await runModel(page);
+
+      await expect(page.getByText(msg('errors.analysisFailed'))).toBeVisible();
+      // La clave cruda nunca se muestra.
+      await expect(page.getByText('errors.analysisFailed')).toHaveCount(0);
+    });
+  });
+
+  test('el polling se detiene cuando el job llega a un estado terminal', async ({
+    page,
+  }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+    await confirmAlignment(page);
+    await runModel(page);
+
+    // El resultado aparece: el job terminó.
+    await expect(
+      page.getByRole('heading', { name: es['biomarkers.title'] }),
+    ).toBeVisible();
+
+    const consultas = async () =>
+      (await readApiCalls(page)).filter((c) => c.path.startsWith('/v1/jobs/'))
+        .length;
+    const antes = await consultas();
+    await page.waitForTimeout(1500);
+    expect(await consultas()).toBe(antes);
+  });
+
+  test('el selector de modelos solo ofrece PCA y DIABLO', async ({ page }) => {
+    await gotoConfigure(page);
+    await waitForDataset(page);
+
+    const opciones = page
+      .getByRole('radiogroup', { name: es['model.typeLabel'] })
+      .getByRole('radio');
+    await expect(opciones).toHaveCount(2);
+    await expect(opciones.nth(0)).toHaveAttribute('value', 'PCA');
+    await expect(opciones.nth(1)).toHaveAttribute('value', 'DIABLO');
+    // El sPLS-DA está diferido (S6): no se ofrece.
+    await expect(page.getByRole('radio', { name: 'sPLS-DA' })).toHaveCount(0);
+    await expect(page.getByRole('radio', { name: 'PLS-DA' })).toHaveCount(0);
+  });
+
+  test('un dataset de ejemplo que sugiere sPLS-DA queda en PCA', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await page.route('**/datasets/srbct_gene.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'sample_1,sample_2\n1.2,3.4\n5.6,7.8\n',
+      });
+    });
+    await page.route('**/datasets/srbct_meta.csv', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/csv',
+        body: 'sample,class\nEWS.T1,EWS\nEWS.T2,EWS\n',
+      });
+    });
+
+    await page.getByRole('button', { name: es['topbar.datasetsLabel'] }).click();
+    await page
+      .getByRole('button', { name: msg('datasets.loadLabel', { name: 'srbct' }) })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: es['datasets.title'] }),
+    ).not.toBeVisible();
+
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+
+    // El catálogo sugiere sPLS-DA para este dataset, pero el contrato del
+    // backend no lo acepta (S6): el selector queda en PCA.
+    const opciones = page
+      .getByRole('radiogroup', { name: es['model.typeLabel'] })
+      .getByRole('radio');
+    await expect(opciones).toHaveCount(2);
+    await expect(opciones.nth(0)).toBeChecked();
+    await expect(opciones.nth(1)).not.toBeChecked();
+  });
+
+  test('la pantalla Configurar se muestra traducida en inglés', async ({ page }) => {
+    await seedLocale(page, 'en');
+    await page.goto('/');
+    await page.getByRole('button', { name: en['home.cta'] }).click();
+    await uploadCsv(page, 'demo.csv');
+    await page.getByRole('button', { name: en['load.next'] }).click();
+
+    await expect(
+      page.getByRole('heading', { name: en['configure.datasetTitle'] }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: en['configure.alignmentTitle'] }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('heading', { name: en['configure.modelTitle'], exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: en['configure.alignmentConfirm'] }),
+    ).toBeVisible();
+  });
+});
+
+/**
+ * Etapas del progreso (S30).
+ *
+ * El progreso es POR ETAPA y sin porcentaje: la barra es indeterminada y
+ * lleva la etiqueta de la etapa. Cada test simula una etapa distinta para
+ * comprobar que la UI la muestra.
+ */
+const JOB_STAGES: ProgressStage[] = [
+  'queued',
+  'load',
+  'align',
+  'preprocess',
+  'fit',
+  'transform',
+  'figures',
+];
+
+for (const stage of JOB_STAGES) {
+  test.describe(`etapa del progreso: ${stage}`, () => {
+    // La etapa se repite: el polling avanza recién después de varias
+    // consultas, así la etiqueta no desaparece entre medio.
+    test.use({ jobStages: [stage, stage, stage, stage] });
+
+    test.beforeEach(async ({ page }) => {
+      await page.goto('/');
+    });
+
+    test(`la barra indeterminada muestra la etapa ${stage}`, async ({ page }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+      await page.getByRole('button', { name: es['load.next'] }).click();
+      await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+
+      await expect
+        .poll(
+          async () =>
+            (await readApiCalls(page)).filter((c) => c.path === '/v1/datasets/')
+              .length,
+        )
+        .toBe(1);
+
+      await page.getByRole('button', { name: es['configure.alignmentConfirm'] }).click();
+      await expect
+        .poll(async () => {
+          const aligns = (await readApiCalls(page)).filter((c) =>
+            c.path.includes('/align/'),
+          );
+          return aligns[aligns.length - 1]?.body;
+        })
+        .toEqual({ blocks: ['demo.csv'], confirmed: true });
+
+      const ejecutar = page.getByRole('button', { name: es['configure.run'] });
+      await expect(ejecutar).toBeEnabled();
+      await ejecutar.click();
+      await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
+
+      // Barra indeterminada: sin `aria-valuenow`.
+      const barra = page.getByRole('progressbar');
+      await expect(barra).toBeVisible();
+      await expect(barra).not.toHaveAttribute('aria-valuenow', /.*/);
+
+      // Y la etiqueta de la etapa.
+      await expect(page.getByText(msg(`job.stage.${stage}`))).toBeVisible();
+    });
+  });
+}

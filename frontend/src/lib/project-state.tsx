@@ -8,6 +8,7 @@ import {
 import type {
   IngestWarning,
   ModelConfig,
+  ModelResult,
   UploadResponse,
 } from './types';
 
@@ -33,6 +34,9 @@ export type PreviewData = {
  * `diet` 1/3/5), así que una tabla de metadata puede tener todas sus
  * columnas numéricas. Lo determina el origen del archivo: para los datasets
  * de ejemplo, el `metaFile` del catálogo (`lib/example-datasets.ts`).
+ *
+ * El usuario puede corregirlo a mano desde la pantalla de carga: el control
+ * de rol (`setFileRole`) cambia el archivo entre `block` y `metadata`.
  */
 export type FileRole = 'block' | 'metadata';
 
@@ -65,12 +69,38 @@ export type UploadedFile = {
   warnings?: IngestWarning[];
 };
 
-export type ModelResult = unknown;
-
 export type ProjectState = {
   files: UploadedFile[];
   modelConfig: ModelConfig;
+  /**
+   * Resultado del último análisis.
+   *
+   * El tipo real vive en `lib/types.ts` (calcado de
+   * `backend/app/schemas.py`): no puede haber dos `ModelResult`.
+   */
   result: ModelResult | null;
+  /**
+   * Identificador de la receta de datos en el backend (S3).
+   *
+   * La sesión vive en el backend: el renderer solo guarda el identificador
+   * para poder recuperarla (`GET /v1/datasets/{id}/`) si el usuario vuelve a
+   * la pantalla de configuración.
+   */
+  datasetId: string | null;
+  /**
+   * Identificador del job de análisis (S4).
+   *
+   * Permite reengancharse a un job en curso aunque el usuario recargue la
+   * ventana (G5): el polling se retoma con este identificador.
+   */
+  jobId: string | null;
+  /**
+   * Semilla del análisis (RB-6).
+   *
+   * Se genera una vez por proyecto y viaja en cada solicitud de modelo, así
+   * que dos corridas del mismo proyecto son reproducibles.
+   */
+  seed: number;
 };
 
 const defaultConfig: ModelConfig = {
@@ -80,12 +110,25 @@ const defaultConfig: ModelConfig = {
   filename: '',
 };
 
+/**
+ * Semilla inicial del proyecto.
+ *
+ * El rango es el de una semilla de R con signo de 32 bits: es lo que
+ * `set.seed()` acepta sin recortar.
+ */
+function initialSeed(): number {
+  return Math.floor(Math.random() * 2147483647);
+}
+
 type ProjectContextValue = {
   state: ProjectState;
   addFile: (file: UploadedFile) => void;
   removeFile: (filename: string) => void;
+  setFileRole: (filename: string, role: FileRole) => void;
   setModelConfig: (patch: Partial<ModelConfig>) => void;
   setResult: (result: ModelResult | null) => void;
+  setDatasetId: (datasetId: string | null) => void;
+  setJobId: (jobId: string | null) => void;
   reset: () => void;
 };
 
@@ -96,6 +139,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     files: [],
     modelConfig: defaultConfig,
     result: null,
+    datasetId: null,
+    jobId: null,
+    seed: initialSeed(),
   });
 
   const addFile = useCallback((file: UploadedFile) => {
@@ -113,6 +159,31 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  /**
+   * Cambia el rol de un archivo subido.
+   *
+   * El rol lo declara el usuario, no el dtype: un archivo puede aportar las
+   * variables del modelo o ser la tabla de metadata del estudio. Si el rol
+   * pedido es el que ya tiene, no se toca nada.
+   *
+   * Al cambiar el rol, la receta guardada en el backend queda vieja (tiene
+   * el rol anterior): se limpia su identificador para que la próxima visita
+   * a Configurar cree una receta nueva con los roles correctos.
+   */
+  const setFileRole = useCallback((filename: string, role: FileRole) => {
+    setState((s) => {
+      const archivo = s.files.find((f) => f.filename === filename);
+      if (!archivo || archivo.role === role) return s;
+      return {
+        ...s,
+        files: s.files.map((f) =>
+          f.filename === filename ? { ...f, role } : f,
+        ),
+        datasetId: null,
+      };
+    });
+  }, []);
+
   const setModelConfig = useCallback((patch: Partial<ModelConfig>) => {
     setState((s) => ({ ...s, modelConfig: { ...s.modelConfig, ...patch } }));
   }, []);
@@ -121,13 +192,38 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, result }));
   }, []);
 
+  const setDatasetId = useCallback((datasetId: string | null) => {
+    setState((s) => ({ ...s, datasetId }));
+  }, []);
+
+  const setJobId = useCallback((jobId: string | null) => {
+    setState((s) => ({ ...s, jobId }));
+  }, []);
+
   const reset = useCallback(() => {
-    setState({ files: [], modelConfig: defaultConfig, result: null });
+    setState({
+      files: [],
+      modelConfig: defaultConfig,
+      result: null,
+      datasetId: null,
+      jobId: null,
+      seed: initialSeed(),
+    });
   }, []);
 
   return (
     <ProjectContext.Provider
-      value={{ state, addFile, removeFile, setModelConfig, setResult, reset }}
+      value={{
+        state,
+        addFile,
+        removeFile,
+        setFileRole,
+        setModelConfig,
+        setResult,
+        setDatasetId,
+        setJobId,
+        reset,
+      }}
     >
       {children}
     </ProjectContext.Provider>

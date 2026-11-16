@@ -7,6 +7,7 @@ token compartido se fija a un valor conocido para poder llamar a la API.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -73,3 +74,62 @@ def write_block(data_dir: Path) -> Callable[[str, str], Path]:
         return path
 
     return _write
+
+
+@pytest.fixture
+def crear_dataset(client: Any, write_block: Any) -> Callable[..., str]:
+    """Crea una receta de datos con su alineación confirmada.
+
+    Devuelve el identificador de la receta. Los bloques se describen como
+    ``{"name": ..., "role": ...}``, igual que en la API.
+    """
+
+    def _crear(
+        bloques: list[dict[str, str]],
+        *,
+        target: dict[str, str] | None = None,
+        confirmed: bool = True,
+    ) -> str:
+        cuerpo: dict[str, Any] = {"blocks": bloques}
+        if target is not None:
+            cuerpo["target"] = target
+
+        respuesta = client.post("/v1/datasets/", json=cuerpo)
+        assert respuesta.status_code == 201, respuesta.text
+        dataset_id = respuesta.json()["id"]
+
+        alineacion = client.post(
+            f"/v1/datasets/{dataset_id}/align/",
+            json={
+                "blocks": [bloque["name"] for bloque in bloques],
+                "confirmed": confirmed,
+            },
+        )
+        assert alineacion.status_code == 200, alineacion.text
+        return dataset_id
+
+    return _crear
+
+
+@pytest.fixture
+def esperar_job(client: Any) -> Callable[..., dict[str, Any]]:
+    """Espera a que un job alcance un estado terminal y devuelve su JSON.
+
+    El plazo es holgado porque el proceso hijo importa la librería
+    analítica (y matplotlib, para las figuras): el primer arranque paga esa
+    cuenta.
+    """
+
+    def _esperar(job_id: str, *, timeout_s: float = 60.0) -> dict[str, Any]:
+        limite = time.monotonic() + timeout_s
+        ultimo: dict[str, Any] = {}
+        while time.monotonic() < limite:
+            respuesta = client.get(f"/v1/jobs/{job_id}/")
+            assert respuesta.status_code == 200, respuesta.text
+            ultimo = respuesta.json()
+            if ultimo["status"] in {"completed", "failed", "cancelled"}:
+                return ultimo
+            time.sleep(0.02)
+        raise AssertionError(f"El job no terminó dentro del plazo: {ultimo}")
+
+    return _esperar

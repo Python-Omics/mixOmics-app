@@ -503,19 +503,24 @@ def test_la_api_no_importa_pythomics_models() -> None:
     assert "pythomics.models" not in sys.modules
 
 
-def test_diablo_devuelve_un_error_explicito_de_no_implementado(
+def test_diablo_sin_variable_de_clase_no_se_acepta(
     client: Any,
     write_block: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """DIABLO queda explícitamente diferido hasta T9."""
+    """El DIABLO es supervisado: sin variable de clase no se encola el job.
+
+    El DIABLO se implementó en T9; lo que se comprueba acá es que una
+    receta sin variable de clase se rechaza con un error claro, y no con un
+    job que falla más tarde.
+    """
     dataset_id = _crear_dataset_alineado(client, write_block)
 
     async def con_r() -> Capabilities:
         return Capabilities(pythomics=True, r=True, mixomics=True)
 
     monkeypatch.setattr("app.api.probe_capabilities_async", con_r)
-    aceptado = client.post(
+    respuesta = client.post(
         "/v1/model/",
         json={
             "dataset_id": dataset_id,
@@ -523,13 +528,10 @@ def test_diablo_devuelve_un_error_explicito_de_no_implementado(
             "n_components": 2,
         },
     )
-    assert aceptado.status_code == 202, aceptado.text
 
-    job = _esperar_job(client, aceptado.json()["job_id"])
-
-    assert job["status"] == "failed", job
-    assert job["error"]["code"] == "E_NOT_IMPLEMENTED"
-    assert job["error"]["detail"]["model_type"] == "DIABLO"
+    assert respuesta.status_code == 422, respuesta.text
+    assert respuesta.json()["error"]["code"] == "E_TARGET_COLUMN_MISSING"
+    assert respuesta.json()["error"]["detail"]["reason"] == "diablo_requires_target"
 
 
 def test_model_sin_R_devuelve_503_con_el_error_uniforme(

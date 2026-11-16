@@ -130,4 +130,89 @@ predeterminados (`center=True`, `scale=False`).
 
 ---
 
+## Figuras
+
+Las figuras se generan **en el worker**, nunca en la API: el proceso de
+FastAPI no importa matplotlib ni `pythomics.visualizations` (S30). La etapa
+`figures` del pipeline dibuja las figuras que corresponden al modelo.
+
+| Modelo | Figuras | Biblioteca |
+|--------|---------|------------|
+| PCA | Un **sample plot** por bloque de variables (PC1 contra PC2) | `pythomics.visualizations.plot_pca` |
+| DIABLO | Un **loading plot** (las variables con mayor \|loading\| por bloque) y un **círculo de correlaciones** | `pythomics.visualizations.plot_biomarkers` y `plot_circos` |
+
+El sample plot **no** sirve para el DIABLO: `plot_pca` usa `model.variates_`,
+que el wrapper de DIABLO no expone (sus variates salen de `transform()`).
+El loading plot y el círculo sí usan la API de DIABLO/PLS
+(`model.names_`, `model.get_biomarkers`, `model.loadings_`, `model.X_dict_` y
+`model.transform`).
+
+| Concepto | Detalle |
+|----------|---------|
+| Qué figura | El sample plot (PC1 contra PC2) de cada bloque de variables del PCA; el loading plot y el círculo de correlaciones del DIABLO |
+| Dónde vive | En el directorio del job, como `<nombre>.png` |
+| Cómo se llama | `scores_<bloque>` para el sample plot del PCA; `biomarkers` y `circos` para las figuras del DIABLO. `Figure.name` es el nombre **sin** extensión (es el que se pide en la URL) y `Figure.path` es el archivo relativo al directorio del job |
+| Cómo se sirve | `GET /v1/files/{job_id}/{name}.png`, que solo sirve archivos del directorio del job |
+| Con variable de clase | El sample plot se colorea por la clase: el frame de metadatos lleva la columna del target, con el índice en los IDs canónicos de muestra. En el círculo, cada clase tiene su color en el anillo de expresión |
+| Sin variable de clase | El frame de metadatos va vacío, pero con **una fila por muestra**: la biblioteca concatena los scores con los metadatos, y un número de filas distinto deja filas en blanco en el gráfico |
+| Un solo componente | El sample plot del PCA es bidimensional: con un solo componente no se genera figura (queda avisado en el `worker.log`) y el resultado del análisis no se pierde. El DIABLO sí dibuja sus dos figuras con un solo componente |
+
+---
+
+## DIABLO (RF-8)
+
+El DIABLO es el modelo **supervisado** multi-bloque. Se ajusta con
+`pythomics.models.DIABLOWrapper`, que llama a `block.splsda` de mixOmics en
+R: el resultado **es** el de R, así que la paridad con mixOmics es inherente
+y no se mide aparte (L20).
+
+Como el cálculo ocurre en R, la API degrada a `503` antes de encolar cuando
+la máquina no tiene R o no tiene el paquete `mixOmics` (S26). Si R falla
+**durante** el job, el job queda en `failed` con un error claro
+(`E_ANALYSIS_FAILED`) y la salida de R queda en el `worker.log` del job.
+
+| Concepto | Detalle |
+|----------|---------|
+| Bloques de variables | Solo los bloques con rol `block`. La tabla de phenotypes aporta la clase, no variables |
+| Variable de clase | Es obligatoria: sin `target` la solicitud se rechaza con `E_TARGET_COLUMN_MISSING` (422) y no se encola ningún job. La columna tiene que existir en su bloque; si no, el job falla con el mismo código |
+| Orden de las muestras | El vector de clase sale del bloque **alineado**, así que viene en el orden canónico de `alignment.sample_ids`: la clase nunca se asigna a la muestra equivocada (S39) |
+| Columna de clase | Nunca es una variable del modelo, aunque su bloque tenga rol `block` |
+| `design` | Matriz p×p (p = cantidad de bloques). Sin ella se usa el valor predeterminado de mixOmics (ceros en la diagonal y unos en el resto) y se registra en la provenance |
+| `keepX` | Lista por bloque, con un valor por componente (la convención de mixOmics). Un bloque desconocido o una lista de otra longitud es un error del request, no un silencio de R |
+| Semilla | La semilla pedida o una generada, registrada en la provenance (RB-6) |
+
+### Resultado
+
+| Campo | Contenido |
+|-------|-----------|
+| `scores` | Los variates de cada bloque: filas = muestras (en el orden canónico), columnas = componentes |
+| `loadings` | El peso de cada variable en cada componente, por bloque |
+| `biomarkers` | Las variables que el modelo seleccionó en cada bloque y en cada componente (`get_biomarkers`), con su loading |
+| `correlations` | Una matriz por par de bloques, con la clave `"bloqueA|bloqueB"`: la correlación entre los variates de A y los de B (una fila por componente de A, una columna por componente de B) |
+| `provenance` | Los parámetros efectivos: `model_type`, `estimator`, `center`, `scale`, `n_components`, `preprocessing`, `blocks`, `target`, `design` y `keepX`. Además, la versión de R y la de mixOmics |
+
+---
+
+## Trazabilidad del análisis (provenance)
+
+El resultado trae una `provenance` que permite **repetir y auditar** el
+análisis (RB-7, S16, S24). Todo su contenido es JSON.
+
+| Campo | Contenido |
+|-------|-----------|
+| `pythomics_version` | Versión instalada de la librería (`importlib.metadata`) |
+| `seed` | Semilla efectiva: la pedida o la generada y registrada (RB-6) |
+| `params` | Parámetros **efectivos** del modelo: `model_type`, `estimator`, `center`, `scale`, `n_components`, `preprocessing`, `blocks` y `target`. En el MVP el preprocesamiento son los valores predeterminados de mixOmics (`center=True`, `scale=False`); el preprocesamiento configurable está diferido. El DIABLO suma `design` y `keepX` |
+| `preprocessing` | Receta de preprocesamiento aplicada: vacía en el MVP |
+| `r_version` y `mixomics_version` | Versión de R y del paquete mixOmics: solo el DIABLO las informa, porque es el único modelo que corre en R |
+| `data_files` | Un registro por archivo de datos que entró al trabajo: nombre, rol (`block` o `metadata`), huella **SHA-256** y tamaño en bytes |
+| `data_fingerprint` | SHA-256 que resume todos los archivos, en el orden de la receta. Es igual en dos corridas que usaron los mismos archivos y distinta en cuanto uno cambia |
+| `created_at` | Marca de tiempo ISO 8601 |
+
+La huella de los datos es lo que liga un resultado a los archivos **exactos**
+que lo produjeron: si el archivo cambia en disco, la huella cambia y se nota
+que el resultado es de otra corrida.
+
+---
+
 A futuro se podrían añadir más endpoints, pero puedes utilizar el docs de swagger para ver los endpoints existentes y testear.
