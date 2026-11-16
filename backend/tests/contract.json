@@ -1,0 +1,250 @@
+{
+  "version": 1,
+  "descripcion": "Contrato compartido entre el renderer y el backend real. Lo leen los dos lados: el test del backend (backend/tests/test_contract_seam.py) reproduce los cuerpos contra la API real y el test del frontend (frontend/tests/e2e/frontend.spec.ts) asserta que el renderer manda exactamente esos cuerpos. Si el mock y el backend se separan, este archivo deja de ser el punto de encuentro y los dos tests fallan.",
+  "escenario": {
+    "descripcion": "El dataset de ejemplo del catalogo (nutrimouse): dos bloques de variables y la tabla de phenotypes.",
+    "archivos": [
+      "nutrimouse_gene.csv",
+      "nutrimouse_lipid.csv",
+      "nutrimouse_meta.csv"
+    ]
+  },
+  "placeholders": {
+    "$dataset_id": {
+      "tipo": "string",
+      "descripcion": "Identificador de la receta que devuelve POST /v1/datasets/."
+    },
+    "$seed": {
+      "tipo": "integer",
+      "descripcion": "Semilla aleatoria del analisis (RB-6). El renderer la genera una vez por proyecto."
+    }
+  },
+  "requests": [
+    {
+      "name": "createDataset",
+      "descripcion": "Crea la receta de datos con los bloques del proyecto.",
+      "method": "POST",
+      "path": "/v1/datasets/",
+      "status": 201,
+      "body": {
+        "blocks": [
+          { "name": "nutrimouse_gene.csv", "role": "block" },
+          { "name": "nutrimouse_lipid.csv", "role": "block" },
+          { "name": "nutrimouse_meta.csv", "role": "metadata" }
+        ]
+      }
+    },
+    {
+      "name": "alignDataset",
+      "descripcion": "Calcula la alineacion por ID (el usuario todavia no la confirmo).",
+      "method": "POST",
+      "path": "/v1/datasets/{dataset_id}/align/",
+      "status": 200,
+      "body": {
+        "blocks": [
+          "nutrimouse_gene.csv",
+          "nutrimouse_lipid.csv",
+          "nutrimouse_meta.csv"
+        ],
+        "confirmed": false
+      }
+    },
+    {
+      "name": "confirmAlignment",
+      "descripcion": "El usuario confirma la alineacion.",
+      "method": "POST",
+      "path": "/v1/datasets/{dataset_id}/align/",
+      "status": 200,
+      "body": {
+        "blocks": [
+          "nutrimouse_gene.csv",
+          "nutrimouse_lipid.csv",
+          "nutrimouse_meta.csv"
+        ],
+        "confirmed": true
+      }
+    },
+    {
+      "name": "setDatasetTarget",
+      "descripcion": "Fija la variable de clase de la receta.",
+      "method": "POST",
+      "path": "/v1/datasets/{dataset_id}/target/",
+      "status": 200,
+      "body": {
+        "block": "nutrimouse_meta.csv",
+        "column": "genotype"
+      }
+    },
+    {
+      "name": "runModelPca",
+      "descripcion": "Encola un PCA (el modelo por defecto de la pantalla de configuracion).",
+      "method": "POST",
+      "path": "/v1/model/",
+      "status": 202,
+      "body": {
+        "dataset_id": "$dataset_id",
+        "model_type": "PCA",
+        "n_components": 2,
+        "seed": "$seed",
+        "target": {
+          "block": "nutrimouse_meta.csv",
+          "column": "genotype"
+        }
+      }
+    },
+    {
+      "name": "runModelDiablo",
+      "descripcion": "Encola un DIABLO (modelo supervisado multibloque).",
+      "method": "POST",
+      "path": "/v1/model/",
+      "status": 202,
+      "body": {
+        "dataset_id": "$dataset_id",
+        "model_type": "DIABLO",
+        "n_components": 2,
+        "seed": "$seed",
+        "target": {
+          "block": "nutrimouse_meta.csv",
+          "column": "genotype"
+        }
+      }
+    }
+  ],
+  "responses": {
+    "upload": {
+      "descripcion": "Resumen de la ingesta de un bloque (POST /v1/archivos/).",
+      "match": [{ "method": "POST", "path": "/v1/archivos/" }],
+      "fields": [
+        { "path": "block.name", "kind": "string" },
+        { "path": "block.filename", "kind": "string" },
+        { "path": "block.n_samples", "kind": "integer" },
+        { "path": "block.n_variables", "kind": "integer" },
+        { "path": "block.n_numeric_variables", "kind": "integer" },
+        { "path": "block.columns", "kind": "array" },
+        { "path": "block.sample_id_column", "kind": "string" },
+        { "path": "warnings", "kind": "array" },
+        { "path": "preview.columns", "kind": "array" },
+        { "path": "preview.rows", "kind": "array" }
+      ]
+    },
+    "dataset": {
+      "descripcion": "Receta de datos (POST /v1/datasets/, GET /v1/datasets/{id}/ y POST /v1/datasets/{id}/target/).",
+      "match": [
+        { "method": "POST", "path": "/v1/datasets/" },
+        { "method": "GET", "path": "/v1/datasets/*/" },
+        { "method": "POST", "path": "/v1/datasets/*/target/" }
+      ],
+      "fields": [
+        { "path": "id", "kind": "string" },
+        { "path": "blocks", "kind": "array" },
+        { "path": "blocks[].name", "kind": "string" },
+        { "path": "blocks[].role", "kind": "enum", "values": ["block", "metadata"] },
+        { "path": "blocks[].n_samples", "kind": "integer" },
+        { "path": "blocks[].n_variables", "kind": "integer" },
+        { "path": "alignment", "kind": "object", "nullable": true },
+        { "path": "preprocessing", "kind": "array" },
+        { "path": "target", "kind": "object", "nullable": true }
+      ]
+    },
+    "alignment": {
+      "descripcion": "Decision de alineacion (POST /v1/datasets/{id}/align/).",
+      "match": [{ "method": "POST", "path": "/v1/datasets/*/align/" }],
+      "fields": [
+        { "path": "sample_ids", "kind": "array" },
+        { "path": "discarded", "kind": "object" },
+        { "path": "confirmed", "kind": "boolean" }
+      ]
+    },
+    "jobAccepted": {
+      "descripcion": "Job aceptado (POST /v1/model/).",
+      "match": [{ "method": "POST", "path": "/v1/model/" }],
+      "fields": [{ "path": "job_id", "kind": "string" }]
+    },
+    "jobEnCurso": {
+      "descripcion": "Job todavia en curso (GET /v1/jobs/{id}/). El progreso va por etapa.",
+      "match": [{ "method": "GET", "path": "/v1/jobs/*/" }],
+      "filtro": { "campo": "status", "valores": ["queued", "running"] },
+      "fields": [
+        { "path": "job_id", "kind": "string" },
+        {
+          "path": "status",
+          "kind": "enum",
+          "values": ["queued", "running"]
+        },
+        { "path": "progress", "kind": "object" },
+        {
+          "path": "progress.stage",
+          "kind": "enum",
+          "values": [
+            "queued",
+            "load",
+            "align",
+            "preprocess",
+            "fit",
+            "transform",
+            "figures"
+          ]
+        },
+        { "path": "progress.index", "kind": "integer" },
+        { "path": "progress.total", "kind": "integer" }
+      ]
+    },
+    "job": {
+      "descripcion": "Job terminado (GET /v1/jobs/{id}/). Son los campos que el renderer lee.",
+      "match": [{ "method": "GET", "path": "/v1/jobs/*/" }],
+      "filtro": { "campo": "status", "valores": ["completed"] },
+      "fields": [
+        { "path": "job_id", "kind": "string" },
+        {
+          "path": "status",
+          "kind": "enum",
+          "values": ["queued", "running", "completed", "failed", "cancelled"]
+        },
+        { "path": "progress", "kind": "object" },
+        {
+          "path": "progress.stage",
+          "kind": "enum",
+          "values": [
+            "queued",
+            "load",
+            "align",
+            "preprocess",
+            "fit",
+            "transform",
+            "figures"
+          ]
+        },
+        { "path": "progress.index", "kind": "integer" },
+        { "path": "progress.total", "kind": "integer" },
+        { "path": "result", "kind": "object" },
+        { "path": "result.model_type", "kind": "string" },
+        { "path": "result.blocks", "kind": "array" },
+        { "path": "result.n_components", "kind": "integer" },
+        { "path": "result.explained_variance_ratio", "kind": "array", "nullable": true },
+        { "path": "result.scores", "kind": "object" },
+        { "path": "result.loadings", "kind": "object" },
+        { "path": "result.biomarkers", "kind": "array" },
+        { "path": "result.biomarkers[].variable_id", "kind": "string" },
+        { "path": "result.biomarkers[].loading", "kind": "number" },
+        { "path": "result.biomarkers[].component", "kind": "integer" },
+        {
+          "path": "result.correlations",
+          "kind": "object",
+          "key_pattern": "^[^|]+\\|[^|]+$"
+        },
+        { "path": "result.figures", "kind": "array" },
+        { "path": "result.figures[].name", "kind": "string", "pattern": "^[^.]+$" },
+        { "path": "result.figures[].kind", "kind": "string" },
+        { "path": "result.figures[].mime", "kind": "string" },
+        { "path": "result.figures[].path", "kind": "string" },
+        { "path": "result.provenance", "kind": "object" },
+        { "path": "result.provenance.pythomics_version", "kind": "string" },
+        { "path": "result.provenance.seed", "kind": "integer" },
+        { "path": "result.provenance.params", "kind": "object" },
+        { "path": "result.provenance.preprocessing", "kind": "array" },
+        { "path": "result.provenance.data_files", "kind": "array" },
+        { "path": "result.provenance.created_at", "kind": "string" }
+      ]
+    }
+  }
+}

@@ -5,26 +5,91 @@
 Esta parte es un ejecutable, lo principal es entender que hace el backend y los endpoints que se utilizan. 
 Se piensa dejar esto para que el front sepa que datos entregar y en que formato.
 
+El backend **valida, orquesta y serializa**: no calcula. El cálculo vive en el
+worker (un proceso hijo) y las matrices nunca se materializan en la API. El
+renderer nunca habla con este servidor: todo pasa por el proxy del proceso
+Electron (`window.pyxAPI` → `api:request` → `fetch` a `127.0.0.1:8501`).
+
 ## Endpoints
 
 | Endpoint | Método |Descripción |
 |----------|--------|------------|
 |`/v1/health`| GET | Enpoint para comprobar conexión|
 |`/v1/archivos/`| GET | Endpoint para listar archivos subidos|
-|`/v1/reporte/`| POST | Endpoint para generar reportes|
-|`/v1/cargar/`| POST | Endpoint para cargar archivos|
+|`/v1/archivos/`| POST | Endpoint para subir un bloque CSV/TSV (multipart, campo `file`), con validación de la ingesta|
+|`/v1/archivos/`| DELETE | Endpoint para borrar archivos|
+|`/v1/reporte/`| POST | Endpoint para generar reportes (501: requiere red)|
 |`/v1/model/`| POST | Endpoint para encolar un análisis y recibir su `job_id`|
 |`/v1/jobs/{job_id}/`| GET | Endpoint para consultar el estado, el progreso y el resultado de un job|
 |`/v1/jobs/{job_id}/`| DELETE | Endpoint para cancelar un job y terminar su proceso hijo|
 |`/v1/files/{job_id}/{name}.png`| GET | Endpoint para servir una figura generada por un job|
-|`/v1/model_llm/`| POST | Endpoint para obtener un análisis preliminar de los datos con LLM a través de biomarcadores|
-|`/v1/archivos/`| DELETE | Endpoint para borrar archivos|
+|`/v1/model_llm/`| POST | Endpoint para obtener un análisis preliminar de los datos con LLM a través de biomarcadores (501: requiere red)|
 |`/v1/datasets/`| POST | Endpoint para crear una receta de datos (bloques y variable de clase)|
 |`/v1/datasets/`| GET | Endpoint para listar las recetas guardadas|
 |`/v1/datasets/{dataset_id}/`| GET | Endpoint para obtener una receta de datos|
 |`/v1/datasets/{dataset_id}/target/`| POST | Endpoint para fijar (o cambiar) la variable de clase de una receta|
 |`/v1/datasets/{dataset_id}/align/`| POST | Endpoint para alinear los bloques de una receta por ID de muestra (RF-2)|
 |`/v1/datasets/{dataset_id}/`| DELETE | Endpoint para borrar una receta de datos|
+
+### Autenticación
+
+**Toda ruta exige el token compartido**: la cabecera `X-Pythomics-Token`. El
+token lo genera el proceso Electron al arrancar (`crypto.randomBytes(32)`) y
+viaja por el canal del spawn del backend, en la variable de entorno
+`PYTHOMICS_API_TOKEN`. Sin el token la API responde `401` con el sobre de
+error uniforme.
+
+No es paranoia: escuchar en `127.0.0.1` no vuelve privado al backend. CORS
+cerrado impide que una página web **lea** la API, pero no que le **escriba**:
+sin una segunda barrera, cualquier página abierta por el usuario podría hacer
+`POST /v1/archivos/` y subir o pisar archivos.
+
+### Sobre de error
+
+Los errores de dominio se devuelven como código, nunca como mensaje traducido
+(el renderer traduce el `message_key` con su catálogo de i18n):
+
+```json
+{ "error": { "code": "E_DUPLICATE_SAMPLES", "message_key": "errors.duplicateSamples",
+             "detail": { "file": "nutrimouse_gene.csv", "duplicates": ["S1", "S7"] } } }
+```
+
+El registro completo de códigos está en `app/errors.py`.
+
+---
+
+## Ingesta de bloques (RF-1)
+
+`POST /v1/archivos/` recibe **multipart/form-data** con el campo `file`. El
+archivo lo lee el proceso Electron, no el renderer: el renderer manda la ruta y
+el cuerpo multipart se arma leyendo el archivo del disco.
+
+La convención de columnas es la de Python: **una fila por muestra, una columna
+por variable, y la primera columna es el ID de muestra**.
+
+La validación ocurre **antes** de guardar, y si el archivo no la pasa se borra
+(no queda basura en el directorio de datos):
+
+| Código | HTTP | Qué detecta |
+|---|---|---|
+| `E_FILE_EXTENSION` | 400 | La extensión no es `.csv` ni `.tsv` (RB-14) |
+| `E_EMPTY_FILE` | 400 | El archivo está vacío o es ilegible |
+| `E_MALFORMED_FILE` | 400 | Una fila tiene más o menos campos que el encabezado (indica línea, esperados y encontrados) |
+| `E_MISSING_VALUES` | 400 | Hay celdas vacías: sin ellas el modelo devolvería resultados plausibles pero incorrectos |
+| `E_DUPLICATE_SAMPLES` | 409 | Hay IDs de muestra duplicados (RB-1); se listan los duplicados |
+
+**Las columnas no numéricas no rechazan la carga**: se registran y se listan
+como advertencia (`W_NON_NUMERIC_COLUMNS`, solo en el caso mixto). El **rol**
+del archivo (bloque de variables o tabla de metadata) lo declara el cliente,
+no el tipo de las columnas: los fenotipos de mixOmics vienen codificados como
+enteros, así que una tabla de phenotypes puede tener todas sus columnas
+numéricas.
+
+La respuesta informa **hechos**, no juicios: `n_variables` (total),
+`n_numeric_variables` (cuántas son numéricas por dtype) y `columns` (los
+nombres de todas las columnas de variables, topeadas a 100), para que la
+pantalla de configuración ofrezca elegir la columna de clase. El `preview` va
+como strings y truncado (5 filas × 8 columnas).
 
 ---
 
@@ -215,4 +280,41 @@ que el resultado es de otra corrida.
 
 ---
 
-A futuro se podrían añadir más endpoints, pero puedes utilizar el docs de swagger para ver los endpoints existentes y testear.
+## Pruebas y contrato compartido
+
+Las pruebas del backend están en `backend/tests/` (`pytest`):
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/ -q
+```
+
+Cubren la ingesta (parser y HTTP), las recetas, la alineación, la cola de jobs
+y el worker, las figuras, la provenance, el DIABLO y **la costura con el
+renderer**.
+
+### El contrato compartido
+
+`backend/tests/contract.json` es la **fuente de verdad del contrato entre el
+renderer y el backend**: los cuerpos canónicos de las peticiones y los campos
+de la respuesta que el renderer lee.
+
+Lo leen los dos lados:
+
+| Lado | Archivo | Qué comprueba |
+|---|---|---|
+| Backend | `tests/test_contract_seam.py` | Reproduce los cuerpos canónicos contra la **API real** (con los CSV de ejemplo de `frontend/public/datasets/`) y exige que el backend los acepte y que las respuestas traigan los campos declarados |
+| Frontend | `frontend/tests/e2e/frontend.spec.ts` | Exige que el renderer mande **exactamente** esos cuerpos y que el mock de Playwright responda con esos campos |
+
+Sin ese archivo, los E2E (que corren contra el mock) y el smoke (que corre
+contra el backend real) podrían divergir sin que nadie se entere: el test
+seguiría en verde mientras la app le manda al backend algo que este rechaza.
+Con el contrato compartido, **una divergencia rompe los dos lados**.
+
+Un endpoint nuevo entra al contrato: si el renderer lo consume, su cuerpo y su
+respuesta tienen que estar en `contract.json`.
+
+---
+
+A futuro se podrían añadir más endpoints; el contrato vigente se puede consultar
+en la documentación de Swagger (`http://127.0.0.1:8501/docs`) con el token
+compartido.

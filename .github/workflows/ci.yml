@@ -1,0 +1,368 @@
+# CI de Pythomics — las tres suites en cada push y en cada pull request.
+#
+# Qué corre (y dónde):
+#
+#   job      plataformas                     qué verifica
+#   --------  -----------------------------  ------------------------------------
+#   backend   ubuntu-latest (con R)          pytest del backend con R + mixOmics:
+#             windows-latest (sin R)          la suite completa, y la parte de
+#             macos-latest  (sin R)          DIABLO se omite si no hay R
+#   frontend  ubuntu-latest                  typecheck + build (guardián de i18n)
+#             windows-latest                  + E2E de Playwright (mock del preload)
+#             macos-latest
+#   smoke     ubuntu-latest                  la app Electron real (xvfb), con un
+#                                          job de verdad contra el backend
+#
+# Decisiones del operador (no cambiarlas sin avisar):
+#
+#   * La librería `pythomics` vive en un repositorio PRIVADO
+#     (Sephir0ath/omics). El CI la clona con un Personal Access Token guardado
+#     como secret del repositorio: `PYTHOMICS_LIBRARY_TOKEN`.
+#   * La librería se clona de su rama por defecto (sin `ref`): el equipo de la
+#     librería trabaja en paralelo y el CI tiene que avisar cuando una de sus
+#     mudanças rompe la app.
+#   * R solo en Linux: en Windows y macOS la librería se instala sin el extra
+#     `r` (rpy2 necesita las cabeceras de R) y las pruebas de DIABLO se
+#     omiten solas (pytest.skip).
+#
+# Layout de los checkouts (obligatorio): `backend/requirements.txt` instala la
+# librería en modo editable con la ruta RELATIVA `../../omics`, que pip
+# resuelve contra el directorio de trabajo. Por eso los dos repos se clonan
+# como hermanos:
+#
+#   $GITHUB_WORKSPACE/
+#   ├── mixOmics-app/     ← este repo (actions/checkout con path: mixOmics-app)
+#   │   └── backend/      ← requirements.txt vive acá
+#   └── omics/            ← la librería (actions/checkout con path: omics)
+#
+#   backend/../../omics  ==  $GITHUB_WORKSPACE/omics  ✔
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Un push nuevo cancela la corrida anterior del mismo ref: no hace falta
+# terminar una corrida que ya quedó obsoleta.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Python 3.13 es el mínimo que pide la librería (`requires-python >= 3.13`).
+  PYTHON_VERSION: '3.13'
+  # Node 20.10 es el mínimo que pide el frontend (`engines.node`).
+  NODE_VERSION: '22'
+  # Repositorio privado de la librería.
+  LIBRARY_REPOSITORY: Sephir0ath/omics
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Backend: pytest
+  # ────────────────────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Que un sistema operativo que falle no cancele los demás: el reporte
+      # tiene que mostrar el estado de las tres plataformas.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            # Con R: es la única plataforma donde corre la parte de DIABLO.
+            venv_python: .venv/bin/python
+            con_r: 'true'
+          - os: windows-latest
+            # Sin R: la librería va sin el extra `r` (rpy2 no se puede
+            # compilar sin las cabeceras de R).
+            venv_python: .venv/Scripts/python.exe
+            con_r: 'false'
+          - os: macos-latest
+            venv_python: .venv/bin/python
+            con_r: 'false'
+    defaults:
+      run:
+        # Todo corre desde `backend/`: el cwd es lo que resuelve la ruta
+        # relativa `-e ../../omics` de requirements.txt.
+        working-directory: mixOmics-app/backend
+        shell: bash
+    steps:
+      - name: Validar el secret de la librería
+        # Este paso corre antes del checkout: el directorio de trabajo no
+        # puede ser `backend/` (todavía no existe).
+        working-directory: ${{ github.workspace }}
+        env:
+          TOKEN: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Falta el secret de repositorio PYTHOMICS_LIBRARY_TOKEN."
+            echo "::error::Se usa para clonar la librería privada ($LIBRARY_REPOSITORY)."
+            echo "::error::Créalo en Settings → Secrets and variables → Actions → New repository secret:"
+            echo "::error::un Personal Access Token (classic) con scope 'repo', o un fine-grained token"
+            echo "::error::con permiso de lectura de contenidos sobre $LIBRARY_REPOSITORY."
+            exit 1
+          fi
+
+      - name: Clonar la app
+        uses: actions/checkout@v4
+        with:
+          path: mixOmics-app
+
+      - name: Clonar la librería (privada)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LIBRARY_REPOSITORY }}
+          path: omics
+          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+          persist-credentials: false
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: mixOmics-app/backend/requirements.txt
+
+      # ── R (solo Linux) ───────────────────────────────────────────────────────
+      - name: Instalar R (solo Linux)
+        if: runner.os == 'Linux'
+        run: |
+          # R viene del repositorio de CRAN y no del de Ubuntu: la versión de
+          # Ubuntu puede ser anterior a la que necesitan rpy2 y Bioconductor.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg dirmngr
+          curl -fsSL https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/cran_ubuntu_key.asc > /dev/null
+          . /etc/os-release
+          echo "deb https://cloud.r-project.org/bin/linux/ubuntu ${VERSION_CODENAME}-cran40/" \
+            | sudo tee /etc/apt/sources.list.d/cran.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends r-base r-base-dev
+
+      - name: Preparar la biblioteca de R (solo Linux)
+        if: runner.os == 'Linux'
+        id: rlib
+        run: |
+          mkdir -p "$RUNNER_TEMP/rlib"
+          # La biblioteca de R va en un directorio propio: es la que se cachea.
+          echo "R_LIBS_USER=$RUNNER_TEMP/rlib" >> "$GITHUB_ENV"
+          # rpy2 carga libR.so por nombre: sin esto no lo encuentra.
+          echo "R_HOME=$(R RHOME)" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(R RHOME)/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          echo "version=$(R --version | head -n 1 | sed -E 's/.*version ([0-9.]+).*/\1/')" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Cachear la biblioteca de R (solo Linux)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rlib
+          # La clave lleva lo que la invalida: la versión de R (de la que
+          # depende la versión de Bioconductor) y el hash de los requirements.
+          key: r-library-${{ runner.os }}-R${{ steps.rlib.outputs.version }}-${{ hashFiles('mixOmics-app/backend/requirements.txt') }}
+          restore-keys: |
+            r-library-${{ runner.os }}-R${{ steps.rlib.outputs.version }}-
+
+      - name: Instalar mixOmics (Bioconductor, solo Linux)
+        if: runner.os == 'Linux'
+        run: |
+          Rscript -e 'options(repos = c(CRAN = "https://cloud.r-project.org")); if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager"); BiocManager::install("mixOmics", ask = FALSE, update = FALSE, Ncpus = max(1L, parallel::detectCores() - 1L))'
+
+      # ── Python ──────────────────────────────────────────────────────────────
+      - name: Crear el entorno virtual
+        run: |
+          python -m venv .venv
+          "${{ matrix.venv_python }}" -m pip install --upgrade pip
+
+      - name: Instalar las dependencias del backend (con R)
+        if: runner.os == 'Linux'
+        run: |
+          # requirements.txt trae `-e ../../omics[r,viz]`: rpy2 se compila
+          # contra el R de arriba.
+          "${{ matrix.venv_python }}" -m pip install -r requirements.txt
+          # Dependencias de desarrollo (las declara el propio requirements.txt
+          # en su comentario): pytest y el cliente HTTP de las pruebas.
+          "${{ matrix.venv_python }}" -m pip install pytest httpx2
+
+      - name: Instalar las dependencias del backend (sin R)
+        if: runner.os != 'Linux'
+        run: |
+          # Sin R no se puede instalar el extra `r` (rpy2 necesita las
+          # cabeceras de R): se genera una copia de requirements.txt con el
+          # extra `[viz]` solamente. La copia vive en el mismo directorio, así
+          # que la ruta relativa `-e ../../omics` se resuelve igual.
+          sed 's|omics\[r,viz\]|omics[viz]|' requirements.txt > requirements-ci.txt
+          "${{ matrix.venv_python }}" -m pip install -r requirements-ci.txt
+          "${{ matrix.venv_python }}" -m pip install pytest httpx2
+
+      - name: Resumen del entorno
+        run: |
+          "${{ matrix.venv_python }}" --version
+          if [ "${{ matrix.con_r }}" = "true" ]; then
+            R --version | head -n 1
+            Rscript -e 'cat("mixOmics", as.character(packageVersion("mixOmics")), "\n")'
+          else
+            echo "R: no instalado en esta plataforma (las pruebas de DIABLO se omiten)"
+          fi
+
+      - name: Correr la suite del backend
+        # `python -m pytest` (y no `pytest`): es lo que deja el directorio de
+        # trabajo en el path, que es como los tests importan `app`.
+        run: '"${{ matrix.venv_python }}" -m pytest tests/ -q'
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Frontend: typecheck + build (guardián de i18n) + E2E de Playwright
+  # ────────────────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: mixOmics-app/frontend
+        shell: bash
+    steps:
+      - name: Clonar la app
+        uses: actions/checkout@v4
+        with:
+          path: mixOmics-app
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mixOmics-app/frontend/package-lock.json
+
+      - name: Instalar las dependencias
+        # `npm ci`, no `npm install`: instala exactamente el lockfile.
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (incluye el guardián de i18n)
+        run: npm run build
+
+      - name: Instalar los navegadores de Playwright (Linux)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+
+      - name: Instalar los navegadores de Playwright
+        if: runner.os != 'Linux'
+        # `--with-deps` solo existe en Linux (instala las librerías del
+        # sistema con apt).
+        run: npx playwright install chromium
+
+      - name: E2E (Playwright)
+        run: npx playwright test --project=chromium
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Smoke: la app Electron real, con un job de verdad contra el backend
+  # ────────────────────────────────────────────────────────────────────────────
+  smoke:
+    name: Smoke (Linux)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mixOmics-app/frontend
+        shell: bash
+    steps:
+      - name: Validar el secret de la librería
+        # Este paso corre antes del checkout: el directorio de trabajo no
+        # puede ser `frontend/` (todavía no existe).
+        working-directory: ${{ github.workspace }}
+        env:
+          TOKEN: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Falta el secret de repositorio PYTHOMICS_LIBRARY_TOKEN."
+            echo "::error::Se usa para clonar la librería privada ($LIBRARY_REPOSITORY)."
+            echo "::error::Créalo en Settings → Secrets and variables → Actions → New repository secret:"
+            echo "::error::un Personal Access Token (classic) con scope 'repo', o un fine-grained token"
+            echo "::error::con permiso de lectura de contenidos sobre $LIBRARY_REPOSITORY."
+            exit 1
+          fi
+
+      - name: Clonar la app
+        uses: actions/checkout@v4
+        with:
+          path: mixOmics-app
+
+      - name: Clonar la librería (privada)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.LIBRARY_REPOSITORY }}
+          path: omics
+          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+          persist-credentials: false
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mixOmics-app/frontend/package-lock.json
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Librerías de sistema de Electron
+        run: |
+          # La app es Electron: necesita GTK, las librerías de Chromium y un
+          # display virtual (xvfb) para abrir la ventana.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth \
+            libgtk-3-0 libnotify4 libnss3 libxss1 libasound2 libgbm1 \
+            libdrm2 libxkbcommon0 libxshmfence1 libxcomposite1 libxdamage1 \
+            libxfixes3 libxrandr2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+            libatk-bridge2.0-0 libcups2
+
+      - name: Preparar el backend (venv + librería sin R)
+        # El smoke levanta la app Electron, que a su vez levanta el backend:
+        # el backend necesita la librería para el PCA del job de prueba.
+        working-directory: mixOmics-app/backend
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          sed 's|omics\[r,viz\]|omics[viz]|' requirements.txt > requirements-ci.txt
+          .venv/bin/python -m pip install -r requirements-ci.txt
+
+      - name: Instalar las dependencias del frontend
+        run: npm ci
+
+      - name: Asegurar el binario de Electron
+        # npm >= 11.19 no corre los scripts de instalación de las dependencias
+        # salvo que se aprueben uno por uno: sin esto el binario de Electron
+        # no se descarga y la app no arranca. El script es idempotente (si el
+        # binario ya está, no hace nada).
+        timeout-minutes: 15
+        run: |
+          if [ ! -x node_modules/electron/dist/electron ]; then
+            node node_modules/electron/install.js
+          fi
+          test -x node_modules/electron/dist/electron
+
+      - name: Smoke
+        # xvfb-run da el display virtual que Electron necesita en un runner
+        # sin pantalla. `ELECTRON_DISABLE_SANDBOX=1` porque el runner no trae
+        # el binario `chrome-sandbox` con el bit setuid: el smoke no verifica
+        # el sandbox del proceso, solo la app (CSP, canal de figuras, log).
+        run: xvfb-run -a npm run smoke
+        timeout-minutes: 20
+        env:
+          ELECTRON_DISABLE_SANDBOX: '1'
+          LIBGL_ALWAYS_SOFTWARE: '1'

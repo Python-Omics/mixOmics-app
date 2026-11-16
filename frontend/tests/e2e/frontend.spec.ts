@@ -1,6 +1,7 @@
 import { test as base, expect, type Page } from '@playwright/test';
 import { createIntl } from 'react-intl';
 import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -15,6 +16,7 @@ import {
   installApiMock,
   MOCK_DATASET_ID,
   MOCK_JOB_ID,
+  type ApiResponseRecord,
 } from '../../playwright.config';
 import es from '../../src/i18n/es.json' with { type: 'json' };
 import en from '../../src/i18n/en.json' with { type: 'json' };
@@ -44,6 +46,7 @@ const THEME_GROUP_LABEL = msg('theme.groupLabel', { count: 5 });
 type MockWindow = {
   pyxAPI: PyxAPI;
   __apiCalls?: ApiCallRecord[];
+  __apiResponses?: ApiResponseRecord[];
   __fileTextCalled?: boolean;
 };
 
@@ -1621,6 +1624,18 @@ async function readApiCalls(page: Page): Promise<ApiCallRecord[]> {
 }
 
 /**
+ * Lee el registro de respuestas que sirvió el mock de Playwright.
+ *
+ * Lo consulta el test de costura: las compara con el contrato compartido
+ * con el backend real.
+ */
+async function readApiResponses(page: Page): Promise<ApiResponseRecord[]> {
+  return page.evaluate(
+    () => (window as unknown as MockWindow).__apiResponses ?? [],
+  );
+}
+
+/**
  * Anti-FOUC y CSP.
  *
  * El anti-FOUC tiene que aplicar el tema persistido ANTES de que React
@@ -2486,3 +2501,594 @@ for (const stage of JOB_STAGES) {
     });
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Costura con el backend real: el contrato compartido
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Ruta del contrato compartido con el backend real.
+ *
+ * El archivo vive en `backend/tests/contract.json`: es el único lugar del
+ * repo donde los dos lados (este test y `backend/tests/test_contract_seam.py`)
+ * pueden leerlo. Declara los cuerpos canónicos que manda el renderer y los
+ * campos de la respuesta que el renderer lee.
+ *
+ * Los dos lados lo comprueban contra su realidad: este test contra el **mock**
+ * y el test del backend contra la **API real**. Si el mock y el backend se
+ * separan, el contrato deja de ser el punto de encuentro y los dos tests
+ * fallan.
+ */
+function rutaContrato(): string {
+  const aqui = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(
+    aqui,
+    '..',
+    '..',
+    '..',
+    'backend',
+    'tests',
+    'contract.json',
+  );
+}
+
+type ContractKind =
+  | 'string'
+  | 'integer'
+  | 'number'
+  | 'boolean'
+  | 'array'
+  | 'object'
+  | 'enum';
+
+type ContractField = {
+  path: string;
+  kind: ContractKind;
+  values?: string[];
+  pattern?: string;
+  key_pattern?: string;
+  nullable?: boolean;
+};
+
+type ContractMatch = { method: string; path: string };
+
+type ContractResponse = {
+  descripcion?: string;
+  match: ContractMatch[];
+  filtro?: { campo: string; valores: string[] };
+  fields: ContractField[];
+};
+
+type Contract = {
+  version: number;
+  escenario: { archivos: string[] };
+  placeholders: Record<string, { tipo: string; descripcion: string }>;
+  requests: Array<{
+    name: string;
+    method: string;
+    path: string;
+    status: number;
+    body: Record<string, unknown>;
+  }>;
+  responses: Record<string, ContractResponse>;
+};
+
+let contratoCache: Contract | null = null;
+
+/** Lee (una sola vez) el contrato compartido con el backend. */
+function leerContrato(): Contract {
+  if (!contratoCache) {
+    const ruta = rutaContrato();
+    if (!existsSync(ruta)) {
+      throw new Error(`No se encuentra el contrato compartido en ${ruta}.`);
+    }
+    contratoCache = JSON.parse(readFileSync(ruta, 'utf8')) as Contract;
+  }
+  return contratoCache;
+}
+
+/** El cuerpo canónico de una petición del contrato. */
+function cuerpoCanonico(
+  contrato: Contract,
+  nombre: string,
+): Record<string, unknown> {
+  const encontrada = contrato.requests.find((r) => r.name === nombre);
+  if (!encontrada) {
+    throw new Error(`El contrato no define la petición '${nombre}'.`);
+  }
+  return encontrada.body;
+}
+
+/**
+ * Resuelve una ruta de campo del contrato sobre un cuerpo.
+ *
+ * La sintaxis son segmentos separados por punto; un segmento terminado en
+ * `[]` significa "cada elemento de la lista".
+ */
+function resolverCamino(
+  camino: string,
+  cuerpo: unknown,
+): { existe: boolean; valores: unknown[] } {
+  let actuales: unknown[] = [cuerpo];
+
+  for (const segmento of camino.split('.')) {
+    const esLista = segmento.endsWith('[]');
+    const clave = esLista ? segmento.slice(0, -2) : segmento;
+    const siguientes: unknown[] = [];
+
+    for (const actual of actuales) {
+      if (
+        typeof actual !== 'object' ||
+        actual === null ||
+        Array.isArray(actual)
+      ) {
+        return { existe: false, valores: [] };
+      }
+      const registro = actual as Record<string, unknown>;
+      if (!(clave in registro)) {
+        return { existe: false, valores: [] };
+      }
+      const hijo = registro[clave];
+      if (esLista) {
+        if (!Array.isArray(hijo)) {
+          return { existe: false, valores: [] };
+        }
+        siguientes.push(...hijo);
+      } else {
+        siguientes.push(hijo);
+      }
+    }
+
+    actuales = siguientes;
+  }
+
+  return { existe: true, valores: actuales };
+}
+
+/** ¿El valor tiene el tipo que declara el contrato? */
+function cumpleTipo(valor: unknown, kind: string): boolean {
+  switch (kind) {
+    case 'string':
+      return typeof valor === 'string';
+    case 'integer':
+      return typeof valor === 'number' && Number.isInteger(valor);
+    case 'number':
+      return typeof valor === 'number';
+    case 'boolean':
+      return typeof valor === 'boolean';
+    case 'array':
+      return Array.isArray(valor);
+    case 'object':
+      return (
+        typeof valor === 'object' && valor !== null && !Array.isArray(valor)
+      );
+    case 'enum':
+      return typeof valor === 'string';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Los errores que tiene un cuerpo frente a los campos del contrato.
+ *
+ * Cada error dice que campo falla y por que: un campo que no existe, un
+ * tipo que no coincide, un valor fuera de la lista permitida o un nombre
+ * que no cumple el patron.
+ */
+function erroresDeCampos(
+  campos: ContractField[],
+  cuerpo: unknown,
+): string[] {
+  const errores: string[] = [];
+
+  for (const campo of campos) {
+    const { existe, valores } = resolverCamino(campo.path, cuerpo);
+
+    if (!existe) {
+      errores.push(`falta el campo '${campo.path}'`);
+      continue;
+    }
+
+    for (const valor of valores) {
+      if (valor === null) {
+        if (campo.nullable) continue;
+        errores.push(`el campo '${campo.path}' es null`);
+        continue;
+      }
+
+      if (!cumpleTipo(valor, campo.kind)) {
+        errores.push(
+          `el campo '${campo.path}' es ${typeof valor} y el contrato pide ${campo.kind}`,
+        );
+        continue;
+      }
+
+      if (campo.kind === 'enum' && campo.values && !campo.values.includes(valor as string)) {
+        errores.push(
+          `el campo '${campo.path}' vale ${String(valor)} y no esta en ${campo.values.join(', ')}`,
+        );
+      }
+
+      if (campo.pattern && !new RegExp(campo.pattern).test(String(valor))) {
+        errores.push(
+          `el campo '${campo.path}' vale ${String(valor)} y no cumple ${campo.pattern}`,
+        );
+      }
+
+      if (campo.key_pattern) {
+        const claves = Object.keys(valor as Record<string, unknown>);
+        for (const clave of claves) {
+          if (!new RegExp(campo.key_pattern).test(clave)) {
+            errores.push(
+              `la clave '${clave}' de '${campo.path}' no cumple ${campo.key_pattern}`,
+            );
+          }
+        }
+      }
+    }
+  }
+
+  return errores;
+}
+
+/** Escapa los caracteres especiales de una expresion regular. */
+function escaparRegex(texto: string): string {
+  return texto.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * ¿La ruta de una petición coincide con el patrón del contrato?
+ *
+ * El `*` del patron matchea un segmento entero de la ruta.
+ */
+function coincideRuta(ruta: string, patron: string): boolean {
+  const partes = patron.split('*').map(escaparRegex);
+  return new RegExp(`^${partes.join('[^/]+')}$`).test(ruta);
+}
+
+/** ¿La respuesta sirve para alguno de los patrones del contrato? */
+function coincideCon(
+  respuesta: ApiResponseRecord,
+  patrones: ContractMatch[],
+): boolean {
+  return patrones.some(
+    (patron) =>
+      respuesta.method === patron.method &&
+      coincideRuta(respuesta.path, patron.path),
+  );
+}
+
+/**
+ * ¿La respuesta pasa el filtro del contrato?
+ *
+ * El filtro decide a que respuestas se aplica una entrada: el job
+ * terminado y el job en curso son dos formas distintas de la misma
+ * respuesta.
+ */
+function pasaFiltro(
+  respuesta: ApiResponseRecord,
+  filtro?: { campo: string; valores: string[] },
+): boolean {
+  if (!filtro) return true;
+  const data = respuesta.data as Record<string, unknown> | undefined;
+  const valor = data?.[filtro.campo];
+  return typeof valor === 'string' && filtro.valores.includes(valor);
+}
+
+/**
+ * Los placeholders de un cuerpo canónico: campo -> nombre del placeholder.
+ *
+ * Un placeholder es un string que empieza con `$` (por ejemplo
+ * `$dataset_id`): lo que el backend real pone en ese campo depende de la
+ * corrida, así que se compara la forma, no el valor.
+ */
+function placeholdersDelBody(
+  canonico: Record<string, unknown>,
+  contrato: Contract,
+): Record<string, string> {
+  const mapa: Record<string, string> = {};
+  for (const [campo, valor] of Object.entries(canonico)) {
+    if (typeof valor === 'string' && valor in contrato.placeholders) {
+      mapa[campo] = valor;
+    }
+  }
+  return mapa;
+}
+
+/** Reemplaza por su placeholder los campos que el contrato declara variables. */
+function normalizar(
+  cuerpo: unknown,
+  mapa: Record<string, string>,
+): unknown {
+  if (Array.isArray(cuerpo)) {
+    return cuerpo.map((item) => normalizar(item, mapa));
+  }
+  if (cuerpo && typeof cuerpo === 'object') {
+    const salida: Record<string, unknown> = {};
+    for (const [clave, valor] of Object.entries(
+      cuerpo as Record<string, unknown>,
+    )) {
+      salida[clave] = mapa[clave] ? mapa[clave] : normalizar(valor, mapa);
+    }
+    return salida;
+  }
+  return cuerpo;
+}
+
+/** ¿El valor cumple el tipo que el contrato declara para el placeholder? */
+function cumpleTipoDeclarado(valor: unknown, tipo: string): boolean {
+  switch (tipo) {
+    case 'string':
+      return typeof valor === 'string' && valor.length > 0;
+    case 'integer':
+      return typeof valor === 'number' && Number.isInteger(valor);
+    case 'number':
+      return typeof valor === 'number';
+    default:
+      return true;
+  }
+}
+
+/**
+ * Costura entre el renderer y el backend real (T11a).
+ *
+ * Los E2E de este archivo corren contra el **mock** y el smoke corre contra
+ * el **backend real** pero no pasa por las pantallas. Nadie mira a los dos
+ * juntos: si el contrato cambia de forma, el mock y el backend divergen y los
+ * E2E siguen en verde mintiendo.
+ *
+ * Estos tests usan el **contrato compartido** (`backend/tests/contract.json`),
+ * que es el único lugar donde están los cuerpos canónicos y los campos de
+ * la respuesta. El test del backend reproduce esos cuerpos contra la API
+ * real; estos assertan que el renderer manda exactamente esos cuerpos y que
+ * el mock responde con esos campos.
+ */
+test.describe('Costura con el backend real (contrato compartido)', () => {
+  // El mock informa las columnas reales de la tabla de phenotypes: la
+  // columna de clase del contrato es una de ellas.
+  test.use({
+    block: { columns: ['genotype', 'diet'] },
+    jobStages: ['queued'],
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+
+  /**
+   * Recorre el pipeline completo con el dataset de ejemplo del escenario:
+   * carga, receta, alineación, variable de clase y modelo.
+   *
+   * El modelo se elige a mano: el catalogo de ejemplos sugiere DIABLO para
+   * el nutrimouse, así que sin esta elección el cuerpo sería siempre el
+   * del DIABLO.
+   */
+  async function flujoCompleto(page: Page, modelo: 'PCA' | 'DIABLO') {
+    await gotoPipeline(page);
+    await mockNutrimouseAssets(page);
+    await page
+      .getByRole('button', { name: es['topbar.datasetsLabel'] })
+      .click();
+    await page
+      .getByRole('button', {
+        name: msg('datasets.loadLabel', { name: 'nutrimouse' }),
+      })
+      .click();
+    await expect(
+      page.getByRole('dialog', { name: es['datasets.title'] }),
+    ).not.toBeVisible();
+
+    await page.getByRole('button', { name: es['load.next'] }).click();
+    await expect(page.getByText(es['topbar.step.configure'])).toBeVisible();
+
+    // La receta se crea sola, con los bloques del proyecto.
+    await esperarLlamada(
+      page,
+      (c) => c.method === 'POST' && c.path === '/v1/datasets/',
+    );
+
+    // La alineación se calcula sola (todavía sin confirmar).
+    await esperarLlamada(
+      page,
+      (c) => c.method === 'POST' && /\/align\/$/.test(c.path),
+    );
+
+    // El usuario elige el modelo.
+    await page
+      .getByRole('radiogroup', { name: es['model.typeLabel'] })
+      .getByRole('radio', { name: modelo })
+      .check();
+
+    // Y la variable de clase.
+    await page
+      .getByLabel(es['configure.targetColumnLabel'])
+      .selectOption('genotype');
+    await esperarLlamada(
+      page,
+      (c) => c.method === 'POST' && /\/target\/$/.test(c.path),
+    );
+
+    // Y confirma la alineación.
+    await page
+      .getByRole('button', { name: es['configure.alignmentConfirm'] })
+      .click();
+    await esperarLlamada(
+      page,
+      (c) =>
+        c.method === 'POST' &&
+        /\/align\/$/.test(c.path) &&
+        (c.body as { confirmed?: boolean } | undefined)?.confirmed === true,
+    );
+
+    // Encola el modelo.
+    const ejecutar = page.getByRole('button', { name: es['configure.run'] });
+    await expect(ejecutar).toBeEnabled();
+    await ejecutar.click();
+    await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
+
+    // Y el job se consulta por polling.
+    await esperarLlamada(
+      page,
+      (c) => c.method === 'GET' && /^\/v1\/jobs\/.+\/$/.test(c.path),
+    );
+
+    // Y llega a un estado terminal: el mock sirve la respuesta terminada y
+    // el polling se detiene. Sin esta espera, la respuesta final podria no
+    // estar registrada todavía y la comprobación sería una carrera.
+    await esperarJobTerminado(page);
+  }
+
+  /** Espera a que el mock sirva la respuesta de un job terminado. */
+  async function esperarJobTerminado(page: Page) {
+    await expect
+      .poll(async () =>
+        (await readApiResponses(page)).some(
+          (r) =>
+            r.path.startsWith('/v1/jobs/') &&
+            (r.data as { status?: string } | undefined)?.status ===
+              'completed',
+        ),
+      )
+      .toBe(true);
+  }
+
+  /** Espera a que aparezca una llamada que cumpla el filtro. */
+  async function esperarLlamada(
+    page: Page,
+    filtro: (c: ApiCallRecord) => boolean,
+  ) {
+    await expect
+      .poll(async () => (await readApiCalls(page)).filter(filtro).length)
+      .toBeGreaterThan(0);
+  }
+
+  test('el renderer manda exactamente los cuerpos canónicos del contrato', async ({
+    page,
+  }) => {
+    const contrato = leerContrato();
+    await flujoCompleto(page, 'PCA');
+
+    const llamadas = await readApiCalls(page);
+
+    // La receta: los bloques del proyecto, cada uno con su rol.
+    const crear = llamadas.find(
+      (c) => c.method === 'POST' && c.path === '/v1/datasets/',
+    );
+    expect(crear?.body).toEqual(cuerpoCanonico(contrato, 'createDataset'));
+
+    // La alineación: se calcula sola y después la confirma el usuario.
+    const alineaciones = llamadas.filter(
+      (c) => c.method === 'POST' && /\/align\/$/.test(c.path),
+    );
+    expect(alineaciones.length).toBeGreaterThanOrEqual(2);
+    expect(alineaciones[0]?.body).toEqual(
+      cuerpoCanonico(contrato, 'alignDataset'),
+    );
+    expect(alineaciones[alineaciones.length - 1]?.body).toEqual(
+      cuerpoCanonico(contrato, 'confirmAlignment'),
+    );
+
+    // La variable de clase.
+    const target = llamadas.find(
+      (c) => c.method === 'POST' && /\/target\/$/.test(c.path),
+    );
+    expect(target?.body).toEqual(cuerpoCanonico(contrato, 'setDatasetTarget'));
+
+    // Y el modelo: con el identificador de la receta y la semilla, que el
+    // contrato declara como variables (el valor depende de la corrida).
+    const modelo = llamadas.find(
+      (c) => c.method === 'POST' && c.path === '/v1/model/',
+    );
+    const canonico = cuerpoCanonico(contrato, 'runModelPca');
+    const mapa = placeholdersDelBody(canonico, contrato);
+    const cuerpoModelo = (modelo?.body ?? {}) as Record<string, unknown>;
+
+    expect(Object.keys(mapa).length).toBeGreaterThan(0);
+    for (const [campo, placeholder] of Object.entries(mapa)) {
+      expect(
+        cumpleTipoDeclarado(
+          cuerpoModelo[campo],
+          contrato.placeholders[placeholder].tipo,
+        ),
+        `el campo '${campo}' no cumple el tipo de '${placeholder}'`,
+      ).toBe(true);
+    }
+    expect(normalizar(cuerpoModelo, mapa)).toEqual(canonico);
+  });
+
+  test('el modelo DIABLO viaja con el cuerpo canónico del contrato', async ({
+    page,
+  }) => {
+    const contrato = leerContrato();
+    await flujoCompleto(page, 'DIABLO');
+
+    const llamadas = await readApiCalls(page);
+    const modelo = llamadas
+      .filter((c) => c.method === 'POST' && c.path === '/v1/model/')
+      .pop();
+    const canonico = cuerpoCanonico(contrato, 'runModelDiablo');
+    const mapa = placeholdersDelBody(canonico, contrato);
+    const cuerpoModelo = (modelo?.body ?? {}) as Record<string, unknown>;
+
+    for (const [campo, placeholder] of Object.entries(mapa)) {
+      expect(
+        cumpleTipoDeclarado(
+          cuerpoModelo[campo],
+          contrato.placeholders[placeholder].tipo,
+        ),
+        `el campo '${campo}' no cumple el tipo de '${placeholder}'`,
+      ).toBe(true);
+    }
+    expect(normalizar(cuerpoModelo, mapa)).toEqual(canonico);
+  });
+
+  test('las respuestas que sirve el mock cumplen el contrato compartido', async ({
+    page,
+  }) => {
+    const contrato = leerContrato();
+    await flujoCompleto(page, 'PCA');
+
+    const respuestas = await readApiResponses(page);
+    expect(respuestas.length).toBeGreaterThan(0);
+
+    for (const [nombre, entrada] of Object.entries(contrato.responses)) {
+      const encontradas = respuestas.filter(
+        (r) =>
+          coincideCon(r, entrada.match) && pasaFiltro(r, entrada.filtro),
+      );
+      expect(
+        encontradas.length,
+        `el mock no sirvió ninguna respuesta para '${nombre}'`,
+      ).toBeGreaterThan(0);
+
+      for (const respuesta of encontradas) {
+        const errores = erroresDeCampos(entrada.fields, respuesta.data);
+        expect(
+          errores,
+          `la respuesta '${nombre}' (${respuesta.method} ${respuesta.path}) no cumple el contrato:\n${errores.join('\n')}`,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  test('toda respuesta que sirve el mock esta cubierta por el contrato', async ({
+    page,
+  }) => {
+    const contrato = leerContrato();
+    await flujoCompleto(page, 'PCA');
+
+    const respuestas = await readApiResponses(page);
+    for (const respuesta of respuestas) {
+      const cubierta = Object.values(contrato.responses).some(
+        (entrada) =>
+          coincideCon(respuesta, entrada.match) &&
+          pasaFiltro(respuesta, entrada.filtro),
+      );
+      expect(
+        cubierta,
+        `la respuesta ${respuesta.method} ${respuesta.path} no esta cubierta por el contrato`,
+      ).toBe(true);
+    }
+  });
+});

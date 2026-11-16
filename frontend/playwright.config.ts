@@ -77,6 +77,21 @@ export type InstallApiMockOptions = {
 export const MOCK_DATASET_ID = 'ds_mock000001';
 export const MOCK_JOB_ID = 'job_mock000001';
 
+/**
+ * Registro de una respuesta que sirvió el mock.
+ *
+ * El test de costura (el contrato compartido con el backend real) compara
+ * estas respuestas con las que declara `backend/tests/contract.json`: si el
+ * mock deja de servir la forma que el renderer lee, el contrato y el backend
+ * real se separan y el test falla.
+ */
+export type ApiResponseRecord = {
+  method: string;
+  path: string;
+  status: number;
+  data?: unknown;
+};
+
 export function installApiMock(options: InstallApiMockOptions = {}) {
   /** PNG de 16×16 que devuelve el canal de figuras por defecto. */
   const FIGURE_BASE64 =
@@ -122,6 +137,7 @@ export function installApiMock(options: InstallApiMockOptions = {}) {
   const w = window as unknown as {
     pyxAPI: PyxAPI;
     __apiCalls?: ApiCallRecord[];
+    __apiResponses?: ApiResponseRecord[];
     __fileTextCalled?: boolean;
   };
   const mockStatus = {
@@ -133,7 +149,21 @@ export function installApiMock(options: InstallApiMockOptions = {}) {
   // Registro de llamadas al backend (lo consultan los tests).
   const calls: ApiCallRecord[] = [];
   w.__apiCalls = calls;
+  // Registro de las respuestas que sirvió el mock (lo consulta el test de
+  // costura: las compara con el contrato compartido con el backend real).
+  const responses: ApiResponseRecord[] = [];
+  w.__apiResponses = responses;
   w.__fileTextCalled = false;
+
+  /**
+   * Registra la respuesta que el mock acaba de servir.
+   *
+   * Se registra el cuerpo tal como lo ve el renderer: es el mismo que
+   * comparan los tests con el contrato compartido.
+   */
+  function registrar(method: string, path: string, res: ApiResponse<unknown>) {
+    responses.push({ method, path, status: res.status, data: res.data });
+  }
 
   const originalText = File.prototype.text;
   File.prototype.text = function () {
@@ -304,6 +334,111 @@ export function installApiMock(options: InstallApiMockOptions = {}) {
     };
   }
 
+  /** Respuesta del GET, según la ruta. */
+  function responderGet(path: string): ApiResponse<unknown> {
+    if (DATASET_PATH.test(path)) {
+      return dataset
+        ? ok(200, dataset)
+        : { ok: false, status: 404, error: 'dataset no encontrado' };
+    }
+    if (JOB_PATH.test(path)) {
+      return ok(200, buildJob());
+    }
+    return { ok: false, status: 0, error: 'no backend in test' };
+  }
+
+  /** Respuesta del POST, según la ruta. */
+  function responderPost(path: string, body?: unknown): ApiResponse<unknown> {
+    if (path === DATASETS_PATH) {
+      if (options.datasetResponse) {
+        return options.datasetResponse;
+      }
+      const bloques = (body as { blocks?: DatasetBlockInput[] })?.blocks ?? [];
+      dataset = buildDataset(bloques);
+      return ok(201, dataset);
+    }
+    if (ALIGN_PATH.test(path)) {
+      if (options.alignResponse) {
+        return options.alignResponse;
+      }
+      const confirmado =
+        (body as { confirmed?: boolean } | undefined)?.confirmed === true;
+      const nombres = (dataset?.blocks ?? []).map((b) => b.name);
+      const discarded: Record<string, string[]> = {};
+      nombres.forEach((nombre, index) => {
+        discarded[nombre] = index === 0 ? [] : ['S2'];
+      });
+      const alignment: Alignment = {
+        sample_ids: ['S1'],
+        discarded,
+        confirmed: confirmado,
+      };
+      if (dataset) dataset.alignment = alignment;
+      return ok(200, alignment);
+    }
+    if (TARGET_PATH.test(path)) {
+      if (options.targetResponse) {
+        return options.targetResponse;
+      }
+      target = (body ?? null) as TargetSpec | null;
+      if (dataset) dataset = { ...dataset, target };
+      return dataset
+        ? ok(200, dataset)
+        : { ok: false, status: 404, error: 'dataset no encontrado' };
+    }
+    if (path === '/v1/model/') {
+      if (options.modelResponse) {
+        return options.modelResponse;
+      }
+      return ok(202, { job_id: JOB_ID });
+    }
+    return { ok: false, status: 0, error: 'no backend in test' };
+  }
+
+  /** Respuesta del DELETE, según la ruta. */
+  function responderDelete(path: string): ApiResponse<unknown> {
+    if (JOB_PATH.test(path)) {
+      cancelled = true;
+      return ok(202, { job_id: JOB_ID });
+    }
+    return { ok: false, status: 0, error: 'no backend in test' };
+  }
+
+  /** Respuesta de la subida multipart: el backend espera el campo `file`. */
+  function responderUpload(filename: string): ApiResponse<unknown> {
+    if (options.uploadResponse) {
+      return options.uploadResponse;
+    }
+    // El bloque por defecto tiene una sola variable, numérica. Los tests
+    // pueden reconfigurarlo (por ejemplo, con columnas no numéricas).
+    const overrides = options.block ?? {};
+    const block: UploadResponse['block'] = {
+      name: overrides.name ?? filename,
+      filename: overrides.filename ?? filename,
+      n_samples: overrides.n_samples ?? 2,
+      n_variables: overrides.n_variables ?? 1,
+      n_numeric_variables: overrides.n_numeric_variables ?? 1,
+      columns: overrides.columns ?? ['feature_1'],
+      sample_id_column: overrides.sample_id_column ?? 'sample_id',
+    };
+    uploaded.set(block.filename, block);
+    return {
+      ok: true,
+      status: 201,
+      data: {
+        block,
+        warnings: [],
+        preview: {
+          columns: ['sample_id', 'feature_1'],
+          rows: [
+            ['S1', '1.0'],
+            ['S2', '2.0'],
+          ],
+        },
+      } satisfies UploadResponse,
+    };
+  }
+
   w.pyxAPI = {
     getBackendStatus: () => Promise.resolve(mockStatus),
     restartBackend: () => Promise.resolve({ ok: false, error: 'mock' }),
@@ -311,91 +446,31 @@ export function installApiMock(options: InstallApiMockOptions = {}) {
     api: {
       request: <T = unknown>(method: string, path: string, body?: unknown) => {
         calls.push({ method, path, body });
-        return Promise.resolve(
-          asResponse<T>({ ok: false, status: 0, error: 'no backend in test' }),
-        );
+        const respuesta: ApiResponse<unknown> = {
+          ok: false,
+          status: 0,
+          error: 'no backend in test',
+        };
+        registrar(method, path, respuesta);
+        return Promise.resolve(asResponse<T>(respuesta));
       },
       get: <T = unknown>(path: string) => {
         calls.push({ method: 'GET', path });
-        if (DATASET_PATH.test(path)) {
-          return Promise.resolve(
-            asResponse<T>(
-              dataset
-                ? ok(200, dataset)
-                : { ok: false, status: 404, error: 'dataset no encontrado' },
-            ),
-          );
-        }
-        if (JOB_PATH.test(path)) {
-          return Promise.resolve(asResponse<T>(ok(200, buildJob())));
-        }
-        return Promise.resolve(
-          asResponse<T>({ ok: false, status: 0, error: 'no backend in test' }),
-        );
+        const respuesta = responderGet(path);
+        registrar('GET', path, respuesta);
+        return Promise.resolve(asResponse<T>(respuesta));
       },
       post: <T = unknown>(path: string, body?: unknown) => {
         calls.push({ method: 'POST', path, body });
-        if (path === DATASETS_PATH) {
-          if (options.datasetResponse) {
-            return Promise.resolve(asResponse<T>(options.datasetResponse));
-          }
-          const bloques =
-            (body as { blocks?: DatasetBlockInput[] })?.blocks ?? [];
-          dataset = buildDataset(bloques);
-          return Promise.resolve(asResponse<T>(ok(201, dataset)));
-        }
-        if (ALIGN_PATH.test(path)) {
-          if (options.alignResponse) {
-            return Promise.resolve(asResponse<T>(options.alignResponse));
-          }
-          const confirmado =
-            (body as { confirmed?: boolean } | undefined)?.confirmed === true;
-          const nombres = (dataset?.blocks ?? []).map((b) => b.name);
-          const discarded: Record<string, string[]> = {};
-          nombres.forEach((nombre, index) => {
-            discarded[nombre] = index === 0 ? [] : ['S2'];
-          });
-          const alignment: Alignment = {
-            sample_ids: ['S1'],
-            discarded,
-            confirmed: confirmado,
-          };
-          if (dataset) dataset.alignment = alignment;
-          return Promise.resolve(asResponse<T>(ok(200, alignment)));
-        }
-        if (TARGET_PATH.test(path)) {
-          if (options.targetResponse) {
-            return Promise.resolve(asResponse<T>(options.targetResponse));
-          }
-          target = (body ?? null) as TargetSpec | null;
-          if (dataset) dataset = { ...dataset, target };
-          return Promise.resolve(
-            asResponse<T>(
-              dataset
-                ? ok(200, dataset)
-                : { ok: false, status: 404, error: 'dataset no encontrado' },
-            ),
-          );
-        }
-        if (path === '/v1/model/') {
-          if (options.modelResponse) {
-            return Promise.resolve(asResponse<T>(options.modelResponse));
-          }
-          return Promise.resolve(asResponse<T>(ok(202, { job_id: JOB_ID })));
-        }
-        return Promise.resolve(
-          asResponse<T>({ ok: false, status: 0, error: 'no backend in test' }),
-        );
+        const respuesta = responderPost(path, body);
+        registrar('POST', path, respuesta);
+        return Promise.resolve(asResponse<T>(respuesta));
       },
       delete: <T = unknown>(path: string) => {
         calls.push({ method: 'DELETE', path });
-        if (JOB_PATH.test(path)) {
-          cancelled = true;
-          return Promise.resolve(asResponse<T>(ok(202, { job_id: JOB_ID })));
-        }
-        return Promise.resolve(
-          asResponse<T>({ ok: false, status: 0, error: 'no backend in test' }),
-        );
+        const respuesta = responderDelete(path);
+        registrar('DELETE', path, respuesta);
+        return Promise.resolve(asResponse<T>(respuesta));
       },
       // Subida multipart: el backend espera el campo `file`.
       upload: (sourcePath: string, filename: string, content?: string) => {
@@ -406,39 +481,11 @@ export function installApiMock(options: InstallApiMockOptions = {}) {
           sourcePath,
           content,
         });
-        if (options.uploadResponse) {
-          return Promise.resolve(
-            options.uploadResponse,
-          ) as Promise<ApiResponse<UploadResponse>>;
-        }
-        // El bloque por defecto tiene una sola variable, numérica. Los tests
-        // pueden reconfigurarlo (por ejemplo, con columnas no numéricas).
-        const overrides = options.block ?? {};
-        const block: UploadResponse['block'] = {
-          name: overrides.name ?? filename,
-          filename: overrides.filename ?? filename,
-          n_samples: overrides.n_samples ?? 2,
-          n_variables: overrides.n_variables ?? 1,
-          n_numeric_variables: overrides.n_numeric_variables ?? 1,
-          columns: overrides.columns ?? ['feature_1'],
-          sample_id_column: overrides.sample_id_column ?? 'sample_id',
-        };
-        uploaded.set(block.filename, block);
-        return Promise.resolve({
-          ok: true,
-          status: 201,
-          data: {
-            block,
-            warnings: [],
-            preview: {
-              columns: ['sample_id', 'feature_1'],
-              rows: [
-                ['S1', '1.0'],
-                ['S2', '2.0'],
-              ],
-            },
-          } satisfies UploadResponse,
-        });
+        const respuesta = responderUpload(filename);
+        registrar('POST', '/v1/archivos/', respuesta);
+        return Promise.resolve(
+          respuesta,
+        ) as Promise<ApiResponse<UploadResponse>>;
       },
       // Canal de figuras: el renderer arma el `blob:` URL con este base64.
       getFigure: (jobId: string, name: string) => {
