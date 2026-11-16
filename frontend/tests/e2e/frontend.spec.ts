@@ -735,6 +735,104 @@ test.describe('Pythomics frontend — POC', () => {
         expect(t.trim().length).toBeGreaterThan(0);
       }
     });
+
+    /**
+     * Banda multi-omics de Inicio.
+     *
+     * Es una figura decorativa: los tres paneles se dibujan con los datos
+     * reales de `nutrimouse` (el PCA, el circos de mixOmics y la tira de heat
+     * map). No aporta copy al lector de pantalla; lo unico que dice es la
+     * nomenclatura cientifica del circos (nombres de genes y de lipidos).
+     */
+    test.describe('banda multi-omics', () => {
+      test('se renderizan los tres paneles con su contenido', async ({ page }) => {
+        const band = page.locator('.biology-band');
+        await expect(band).toHaveCount(1);
+        // Decorativa: el lector de pantalla no la anuncia.
+        await expect(band).toHaveAttribute('aria-hidden', 'true');
+
+        const panels = page.locator('.biology-panel');
+        await expect(panels).toHaveCount(3);
+
+        // Panel 1: el PCA con los 40 puntos (20 círculos `wt` + 20 rombos `ppar`).
+        const pca = panels.nth(0);
+        await expect(pca.locator('circle')).toHaveCount(20);
+        await expect(pca.locator('path')).toHaveCount(20);
+        // Con grilla y ejes.
+        await expect(pca.locator('line')).toHaveCount(7);
+
+        // Panel 2: el circos de mixOmics (11 cuerdas + 14 sectores del anillo
+        // + 2 pistas de clase) y los 14 nombres de las variables.
+        const circos = panels.nth(1);
+        await expect(circos.locator('path')).toHaveCount(27);
+        await expect(circos.locator('text')).toHaveCount(14);
+
+        // Panel 3: la tira de heat map (20 muestras x 14 genes).
+        await expect(panels.nth(2).locator('rect')).toHaveCount(280);
+
+        // El unico texto de la banda es la nomenclatura cientifica (nombres
+        // de genes y de lipidos): no hay copy de interfaz ni etiquetas
+        // accesibles.
+        const nombres = await band.locator('text').allTextContents();
+        expect(nombres).toHaveLength(14);
+        for (const nombre of nombres) {
+          expect(nombre.trim()).toMatch(/^[A-Za-z0-9.]+$/);
+        }
+        await expect(band.locator('[aria-label]')).toHaveCount(0);
+      });
+
+      test('los paneles quedan visibles cuando termina la animación', async ({
+        page,
+      }) => {
+        const panel = page.locator('.biology-panel').first();
+        await expect
+          .poll(async () =>
+            panel.evaluate((el) => getComputedStyle(el).opacity),
+          )
+          .toBe('1');
+      });
+
+      test('la figura sigue al tema activo', async ({ page }) => {
+        const celda = page.locator('.biology-panel').nth(2).locator('rect').first();
+        const antes = await celda.evaluate((el) => getComputedStyle(el).fill);
+
+        await page.getByRole('button', { name: es['home.openSettings'] }).click();
+        const group = page.getByRole('radiogroup', { name: THEME_GROUP_LABEL });
+        await group.getByRole('radio').filter({ hasText: 'Sterile Aqua' }).click();
+        await page.keyboard.press('Escape');
+
+        // El heat map se colorea con `color-mix()` sobre las custom
+        // properties del tema: al cambiar el tema, cambian los colores.
+        const despues = await celda.evaluate((el) => getComputedStyle(el).fill);
+        expect(despues).not.toBe(antes);
+      });
+    });
+
+    test.describe('banda multi-omics con reduced motion', () => {
+      test.use({ reducedMotion: 'reduce' });
+
+      test('los paneles quedan visibles y estáticos', async ({ page }) => {
+        const panel = page.locator('.biology-panel').first();
+        const estilos = await panel.evaluate((el) => {
+          const cs = getComputedStyle(el);
+          return {
+            opacity: cs.opacity,
+            animationName: cs.animationName,
+            transform: cs.transform,
+          };
+        });
+        // Sin animación: visibles desde el primer frame y sin transformación.
+        expect(estilos.opacity).toBe('1');
+        expect(estilos.animationName).toBe('none');
+        expect(estilos.transform).toBe('none');
+
+        // Y las cuerdas del circos dejan de latir.
+        const chord = page.locator('.biology-circ-chord').first();
+        expect(
+          await chord.evaluate((el) => getComputedStyle(el).animationName),
+        ).toBe('none');
+      });
+    });
   });
 });
 

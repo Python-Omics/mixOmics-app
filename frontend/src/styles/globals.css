@@ -204,4 +204,150 @@
   .label {
     @apply block text-sm font-medium text-slate-700 mb-1;
   }
+
+  /* ─── Banda multi-omics de la pantalla de Inicio ──────────────────────────
+   *
+   * Banda decorativa de tres paneles (PCA, circos de mixOmics, heat map). Los
+   * nombres de clase llevan prefijo `biology-` para no pisar nada del resto
+   * de la app; los valores vienen del artboard
+   * `design/home-biology-figure/02-multiomics-band.html`.
+   *
+   * En pantallas angostas la banda se apila en una columna; a partir de `lg`
+   * toma la geometría del artboard: 460px + 380px + el resto.
+   */
+  .biology-band {
+    /*
+     * `slate-700` es un neutro fijo (Tailwind por defecto, #334155; ver
+     * `design/system.md`): no cambia con el tema, así que se declara acá para
+     * que la rampa divergente del heat map pueda mezclarlo con `var(--p-100)`.
+     * `slate-500` es el otro neutro del circos (las cuerdas negativas).
+     */
+    --slate-700: #334155;
+    --slate-600: #475569;
+    --slate-500: #64748b;
+
+    @apply grid grid-cols-1 gap-8 w-full;
+
+    /*
+     * El ancho del artboard (1440 - 2 x 24 de padding). Más allá de esto la
+     * banda no crece: en una pantalla ancha la figura se mantiene en su
+     * proporción en vez de estirarse.
+     */
+    max-width: 1392px;
+    margin-inline: auto;
+  }
+
+  @screen lg {
+    .biology-band {
+      /*
+       * Las tres columnas se reparten en la proporción del artboard
+       * (460 : 380 : 488). Con el ancho máximo de la banda, en 1440 dan
+       * exactamente 460px + 380px + 488px; por debajo escalan juntas, así que
+       * ninguna de las tres figuras queda aplastada.
+       */
+      grid-template-columns: 460fr 380fr 488fr;
+    }
+  }
+
+  .biology-panel {
+    @apply bg-white border border-pharma-200 rounded-lg p-5;
+
+    /*
+     * Cuando la banda se apila (una sola columna), cada panel queda a su
+     * ancho de diseño y centrado, en vez de estirarse a lo ancho de la
+     * pantalla.
+     */
+    width: 100%;
+    max-width: 510px;
+    margin-inline: auto;
+
+    opacity: 0;
+    animation: biology-enter 640ms cubic-bezier(0.22, 0.75, 0.3, 1) forwards;
+  }
+
+  .biology-panel:nth-child(1) { animation-delay: 80ms; }
+  .biology-panel:nth-child(2) { animation-delay: 280ms; }
+  .biology-panel:nth-child(3) { animation-delay: 480ms; }
+
+  /* Panel 1 — PCA */
+  .biology-grid { stroke: var(--p-100); stroke-width: 1; }
+  .biology-axis { stroke: var(--p-200); stroke-width: 1; }
+  .biology-pt-wt { fill: var(--p-400); }
+  .biology-pt-ppar { fill: var(--p-700); }
+
+  /* Panel 2 — circos de mixOmics */
+  .biology-circ-arc {
+    fill: none;
+    stroke-width: 6;
+    stroke-linecap: butt;
+  }
+
+  /* Genes arriba (verde claro) y lipidos abajo (verde profundo): los dos
+     tonos del anillo se apartan del verde de la clase `wt` (--p-400) y del
+     casi negro de `ppar` (--p-700), asi cada color hace un solo trabajo. */
+  .biology-circ-arc-gene { stroke: var(--p-300); }
+  .biology-circ-arc-lipid { stroke: var(--p-600); }
+
+  .biology-circ-track {
+    fill: none;
+    stroke-width: 1.1;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .biology-circ-wt { stroke: var(--p-400); }
+  .biology-circ-ppar { stroke: var(--p-700); }
+
+  /* Las cuerdas: verde = correlacion positiva, gris = negativa. */
+  .biology-circ-chord {
+    fill: none;
+    stroke-linecap: round;
+    opacity: 0.55;
+    animation: biology-circ-pulse 24s ease-in-out infinite alternate;
+  }
+
+  .biology-circ-pos { stroke: var(--p-500); }
+  .biology-circ-neg { stroke: var(--slate-500); }
+
+  /* Los nombres de las variables: nomenclatura cientifica, no copy de
+     interfaz, asi que no se traducen. */
+  .biology-circ-label {
+    fill: var(--slate-600);
+    font-size: 10px;
+    letter-spacing: 0.01em;
+  }
+}
+
+/*
+ * Keyframes de la banda (fuera de `@layer`: los keyframes no se layerizan).
+ */
+@keyframes biology-enter {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: none; }
+}
+
+/*
+ * El circos: las cuerdas laten despacio (mismo ritmo de 24 s que la doble
+ * helice que reemplazan) y el resto de la figura se queda quieta.
+ */
+@keyframes biology-circ-pulse {
+  from { opacity: 0.34; }
+  to { opacity: 0.68; }
+}
+
+/*
+ * Sin movimiento: los paneles quedan visibles y estáticos desde el primer
+ * frame (y las cuerdas dejan de latir).
+ */
+@media (prefers-reduced-motion: reduce) {
+  .biology-panel {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+
+  .biology-circ-chord {
+    animation: none;
+    opacity: 0.55;
+  }
 }

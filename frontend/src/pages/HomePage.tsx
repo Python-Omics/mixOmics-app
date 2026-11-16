@@ -1,3 +1,4 @@
+import { BiologyBand } from '../components/BiologyBand';
 import { ChartIcon, SettingsIcon } from '../components/icons';
 import { useTranslate } from '../i18n';
 import type { MessageKey } from '../i18n/messages';
@@ -33,6 +34,8 @@ const ROADMAP_KEYS = [
  *   - un solo <h1> por pantalla (aquí, el nombre de la app)
  *   - skip link a #main-content
  *   - el CTA es un <button> real con ícono decorativo (aria-hidden)
+ *   - la banda de figuras es decorativa: va con aria-hidden y no aporta
+ *     texto al lector de pantalla
  *
  * Candidatos para próximas iteraciones de esta pantalla, en orden de valor:
  *   1. Reanudar último análisis   — patrón "continuar donde lo dejaste";
@@ -77,21 +80,38 @@ export function HomePage({ onStart, onOpenSettings }: Props) {
         id="main-content"
         tabIndex={-1}
         aria-label={t('app.mainContent')}
-        className="flex-1 flex items-center justify-center overflow-auto p-6"
+        className="flex-1 flex flex-col overflow-auto p-6"
       >
-        <div className="max-w-2xl text-center space-y-8">
-          <p className="text-xl text-slate-600 leading-relaxed">
-            {t('home.tagline')}
-          </p>
+        {/*
+         * El contenido va en un bloque con `my-auto` (y no con
+         * `justify-center`) para que siga centrado cuando sobra alto y
+         * siga siendo alcanzable con el scroll cuando falta: con
+         * `justify-content` el excedente superior se corta y no se puede
+         * recorrer.
+         */}
+        <div className="my-auto flex w-full flex-col items-center gap-7">
+          {/*
+           * Banda decorativa de tres paneles científicos (PCA, doble
+           * circos plot, heat map). Es decorativa —va con `aria-hidden`— y usa
+           * todo el ancho disponible; el copy y el CTA quedan abajo, en un
+           * bloque angosto y centrado.
+           */}
+          <BiologyBand />
 
-          <button
-            type="button"
-            onClick={onStart}
-            className="btn-primary text-base px-6 py-3"
-          >
-            <ChartIcon className="w-5 h-5" />
-            <span>{t('home.cta')}</span>
-          </button>
+          <div className="w-full max-w-2xl text-center space-y-8">
+            <p className="text-xl text-slate-600 leading-relaxed">
+              {t('home.tagline')}
+            </p>
+
+            <button
+              type="button"
+              onClick={onStart}
+              className="btn-primary text-base px-6 py-3"
+            >
+              <ChartIcon className="w-5 h-5" />
+              <span>{t('home.cta')}</span>
+            </button>
+          </div>
         </div>
       </main>
 

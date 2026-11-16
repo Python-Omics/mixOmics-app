@@ -283,6 +283,63 @@ dos lados lo leen:
 
 Si el mock y el backend se separan, **los dos tests fallan**.
 
+## La banda multi-omics de Inicio
+
+La pantalla de Inicio muestra, arriba del tagline, una **banda decorativa de
+tres paneles científicos**: el PCA de `nutrimouse`, un **circos de mixOmics**
+y una tira de heat map. Sale del artboard `design/home-biology-figure/02-multiomics-band.html`.
+
+| Pieza | Dónde |
+|---|---|
+| `src/components/BiologyBand.tsx` | El componente: los tres paneles en un SVG cada uno |
+| `src/lib/home-figure-data.ts` | **Generado**: los números (coordenadas, paths, rampa) |
+| `scripts/generate_home_figure.py` (en la raíz del repo) | El generador |
+
+### Los datos son reales, no inventados
+
+El renderer **no calcula nada**: dibuja los números que están inline en
+`src/lib/home-figure-data.ts`. Ese módulo lo genera
+
+```bash
+cd mixOmics-app
+backend/.venv/bin/python scripts/generate_home_figure.py
+```
+
+que calcula el PCA con `pythomics.tools.NipalsPCA(n_components=2, center=True,
+scale=False)` sobre `frontend/public/datasets/nutrimouse_gene.csv`, toma las
+clases de la columna `genotype` de `nutrimouse_meta.csv` (`wt` = círculo,
+`ppar` = rombo) y el z-score por variable para el heat map (saturado en ±2.0,
+rampa divergente `slate-700 → --p-100 → --p-400`).
+
+El circos del medio usa el **segundo bloque** (`nutrimouse_lipid.csv`, 40
+muestras × 21 lípidos): el anillo lleva una variable por sector (los genes
+arriba, los lípidos abajo) y las cuerdas son los pares gen/lípid con
+**correlación de Pearson real** por encima de `|r| ≥ 0.70` (11 cuerdas de las
+2.520 que existen: con 0.65 serían 25 y con 0.60, 47 — a partir de ahí el
+centro se vuelve un nudo). Las dos pistas de clase son el perfil (media en z)
+de `wt` y de `ppar` variable por variable, siguiendo el anillo.
+
+El generador **verifica contra el artboard**: vuelve a armar el markup de los
+tres paneles y lo compara, byte a byte, con el que está inline en el HTML del
+diseño. Si divergen, falla y no escribe nada.
+
+> El módulo generado se commitea: el renderer no puede depender de Python ni
+> de un paso de build extra.
+
+### Es decorativa
+
+- El contenedor va con `aria-hidden="true"` y los SVG **no** tienen
+  `aria-label`: un lector de pantalla no anuncia nada.
+- Lo único que dice es la **nomenclatura científica** del circos (los nombres
+  de los genes y de los lípidos: `HPNCL`, `C20.2n.6`, …). Son datos, no copy
+  de interfaz, así que van inline en el SVG y **no se traducen** (RNF-U-3) y
+  no necesitan ninguna clave de i18n nueva.
+- Los colores salen de las custom properties (`--p-*`), así que la figura sigue
+  al tema activo (`data-theme`): al cambiar de tema, el heat map se repinta con
+  la rampa del tema nuevo.
+- Con `prefers-reduced-motion: reduce` los paneles quedan visibles y
+  estáticos desde el primer frame, y las cuerdas del circos dejan de latir.
+
 ## Estructura del proyecto
 
 ```
@@ -311,6 +368,7 @@ frontend/
 │   ├── components/
 │   │   ├── Sidebar.tsx
 │   │   ├── TopBar.tsx
+│   │   ├── BiologyBand.tsx       ← banda decorativa de Inicio (3 paneles)
 │   │   ├── FileDropzone.tsx
 │   │   ├── FileList.tsx
 │   │   ├── DataPreview.tsx
@@ -328,6 +386,7 @@ frontend/
 │   │   ├── types.ts              ← tipos compartidos (IPC, UI, modelos)
 │   │   ├── project-state.tsx     ← contexto con el estado del proyecto
 │   │   ├── example-datasets.ts   ← catálogo de datasets de ejemplo
+│   │   ├── home-figure-data.ts   ← GENERADO: datos de la banda de Inicio
 │   │   └── themes.ts
 │   └── i18n/
 │       ├── es.json              ← fuente de verdad de las claves
