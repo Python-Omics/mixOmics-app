@@ -39,7 +39,7 @@ function AppShell() {
           onOpenSettings={() => setShowSettings(true)}
         />
       ) : (
-        <div className="flex h-screen w-screen overflow-hidden bg-pharma-50">
+        <div className="flex h-full w-full overflow-hidden bg-pharma-50">
           <a href="#main-content" className="skip-link">
             {t('app.skipToContent')}
           </a>
@@ -59,9 +59,19 @@ function AppShell() {
               onOpenExampleDatasets={() => setShowExampleDatasets(true)}
             />
 
+            {/*
+              `relative` a propósito: <main> es el área scrolleable y,
+              al ser el bloque contenedor de los descendientes
+              posicionados en `absolute` (los labels `sr-only`), su
+              `overflow: auto` los recorta. Sin esto, un `absolute` sin
+              ancestro posicionado se escapa del recorte y estira la
+              página: aparece una segunda barra de scroll y, al
+              scrollear, un rectángulo vacío con el fondo de la página
+              debajo del shell.
+            */}
             <main
               id="main-content"
-              className="flex-1 overflow-auto p-6"
+              className="relative flex-1 overflow-auto p-6"
               aria-label={t('app.mainContent')}
               tabIndex={-1}
             >

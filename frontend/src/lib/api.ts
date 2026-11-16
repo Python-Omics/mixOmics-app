@@ -34,6 +34,7 @@ import type {
   AlignmentRequest,
   ApiErrorPayload,
   ApiResponse,
+  BlockRef,
   Dataset,
   DatasetBlockInput,
   DeleteResponse,
@@ -41,12 +42,12 @@ import type {
   FilesResponse,
   Job,
   JobAccepted,
+  KeepXValues,
   ModelRequest,
   TargetSpec,
   UploadResponse,
 } from './types';
-import esCatalog from '../i18n/es.json';
-import type { MessageKey } from '../i18n/messages';
+import { CATALOG_KEYS, type MessageKey } from '../i18n/messages';
 
 // Se re-exportan para que las páginas (y los tests) los importen desde acá,
 // que es donde vive el acceso a la API.
@@ -62,15 +63,6 @@ export type Translate = (
   key: MessageKey,
   values?: Record<string, string | number>,
 ) => string;
-
-/**
- * Todas las claves del catálogo, en runtime.
- *
- * Sirve para resolver las claves que llegan del backend (`message_key`):
- * solo se resuelve una clave que exista de verdad en el catálogo, así que la
- * UI nunca muestra una clave cruda.
- */
-const CATALOG_KEYS: ReadonlySet<string> = new Set(Object.keys(esCatalog));
 
 /**
  * ¿Es un objeto plano (no array) con claves?
@@ -115,6 +107,58 @@ export function withApiError<T>(res: ApiResponse<T>): ApiResponse<T> {
   if (res.ok) return res;
   const apiError = extractApiError(res.data);
   return apiError ? { ...res, apiError } : res;
+}
+
+/**
+ * Selección de keepX lista para viajar en POST /v1/model/.
+ *
+ * Solo se consideran los bloques con rol `block`: la metadata no participa
+ * del modelo. Cada número se repite una vez por componente, como exige el
+ * contrato de mixOmics.
+ */
+export type KeepXSelection = {
+  /** Bloques con un valor, indexados por el nombre exacto de la receta. */
+  keepX?: Record<string, number[]>;
+  /** False si algún valor quedó fuera del rango válido del bloque. */
+  valid: boolean;
+  /** Bloques cuyo valor no se pudo incluir. */
+  invalidBlocks: string[];
+};
+
+export function buildKeepXSelection(
+  values: KeepXValues | undefined,
+  blocks: BlockRef[],
+  nComponents: number,
+): KeepXSelection {
+  const keepX: Record<string, number[]> = {};
+  const invalidBlocks: string[] = [];
+
+  for (const block of blocks) {
+    if (block.role !== 'block') continue;
+
+    const value = values?.[block.name];
+    if (value === undefined) continue;
+
+    if (
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value > block.n_variables
+    ) {
+      invalidBlocks.push(block.name);
+      continue;
+    }
+
+    keepX[block.name] = Array.from(
+      { length: Math.max(0, nComponents) },
+      () => value,
+    );
+  }
+
+  return {
+    keepX: Object.keys(keepX).length > 0 ? keepX : undefined,
+    valid: invalidBlocks.length === 0,
+    invalidBlocks,
+  };
 }
 
 export const api = {

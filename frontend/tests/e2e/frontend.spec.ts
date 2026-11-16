@@ -1260,6 +1260,116 @@ test.describe('Rutas contra el backend real', () => {
 });
 
 /**
+ * Composición de la tarjeta de cada archivo.
+ *
+ * La preview y la descripción de un archivo tienen que vivir en la MISMA
+ * tarjeta: si el resumen va aparte (debajo de la lista de previews), el
+ * usuario tiene que adivinar a qué archivo pertenece cada descripción.
+ */
+test.describe('Tarjeta única por archivo', () => {
+  /**
+   * La tarjeta (`li`) de un archivo dentro de la lista de archivos cargados.
+   *
+   * Se ancla en el encabezado del resumen (el nombre del bloque): es lo
+   * único que dice a qué archivo pertenece la descripción.
+   */
+  function card(page: Page, filename: string) {
+    return page
+      .getByRole('list', { name: es['file.listLabel'] })
+      .getByRole('listitem')
+      .filter({
+        has: page.getByRole('heading', { name: filename, exact: true }),
+      });
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+  });
+
+  test('la preview y la descripción del archivo están en la misma tarjeta', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    const tarjeta = card(page, 'demo.csv');
+    await expect(tarjeta).toHaveCount(1);
+
+    // La preview (la tabla) y el resumen de ingesta comparten tarjeta.
+    await expect(tarjeta.getByRole('table')).toBeVisible();
+    await expect(
+      tarjeta.getByRole('region', { name: es['ingest.summaryTitle'] }),
+    ).toBeVisible();
+    await expect(
+      tarjeta.getByText(msg('ingest.dimensions', { samples: 2, variables: 1 })),
+    ).toBeVisible();
+    await expect(
+      tarjeta.getByRole('button', { name: es['ingest.markAsMetadata'] }),
+    ).toBeVisible();
+  });
+
+  test('cada archivo tiene su propia tarjeta, con su preview y su resumen', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+    await uploadCsv(page, 'demo2.csv');
+
+    for (const nombre of ['demo.csv', 'demo2.csv']) {
+      const tarjeta = card(page, nombre);
+      await expect(tarjeta).toHaveCount(1);
+      await expect(tarjeta.getByRole('table')).toBeVisible();
+      await expect(
+        tarjeta.getByRole('region', { name: es['ingest.summaryTitle'] }),
+      ).toBeVisible();
+    }
+  });
+
+  test('la descripción queda a la derecha de la preview, no debajo', async ({
+    page,
+  }) => {
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    const tarjeta = card(page, 'demo.csv');
+    const cajaTarjeta = await tarjeta.boundingBox();
+    const cajaResumen = await tarjeta
+      .getByRole('region', { name: es['ingest.summaryTitle'] })
+      .boundingBox();
+
+    expect(cajaTarjeta).not.toBeNull();
+    expect(cajaResumen).not.toBeNull();
+
+    // El resumen ocupa la mitad derecha de la tarjeta (no una fila debajo).
+    expect(cajaResumen!.x).toBeGreaterThan(
+      cajaTarjeta!.x + cajaTarjeta!.width / 2,
+    );
+  });
+
+  test('por debajo de md la descripción cae debajo de la preview', async ({
+    page,
+  }) => {
+    // Ventana angosta: la ventana se puede achicar y la tarjeta no entra
+    // en dos columnas, así que la descripción baja bajo la preview.
+    await page.setViewportSize({ width: 700, height: 900 });
+    await gotoPipeline(page);
+    await uploadCsv(page, 'demo.csv');
+
+    const tarjeta = card(page, 'demo.csv');
+    const cajaTabla = await tarjeta.getByRole('table').boundingBox();
+    const cajaResumen = await tarjeta
+      .getByRole('region', { name: es['ingest.summaryTitle'] })
+      .boundingBox();
+
+    expect(cajaTabla).not.toBeNull();
+    expect(cajaResumen).not.toBeNull();
+
+    // Apiladas: la descripción arranca por debajo de la tabla.
+    expect(cajaResumen!.y).toBeGreaterThan(cajaTabla!.y + 10);
+  });
+});
+
+/**
  * Rol del archivo en el proyecto (`block` ↔ `metadata`).
  *
  * El usuario decide si el archivo que sube aporta variables al modelo o si
@@ -2159,6 +2269,205 @@ test.describe('Configurar y ejecutar contra el contrato real', () => {
     await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
   }
 
+  /**
+   * Parámetros de keepX del DIABLO.
+   *
+   * El control se deriva de los bloques reales de la receta: cada bloque de
+   * variables tiene un único número, que se aplica por componente.
+   */
+  test.describe('keepX de DIABLO', () => {
+    test.use({
+      block: {
+        n_variables: 5,
+        n_numeric_variables: 5,
+        columns: ['feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5'],
+      },
+    });
+
+    /** Sube un bloque, crea la receta y prepara un DIABLO supervisado. */
+    async function prepararDiablo(page: Page) {
+      await gotoConfigure(page);
+      await waitForDataset(page);
+      await page.getByRole('radio', { name: 'DIABLO' }).check();
+      await page.getByLabel(es['configure.targetColumnLabel']).selectOption('feature_1');
+      await expect
+        .poll(async () => {
+          const calls = await readApiCalls(page);
+          return calls.find((c) => c.path.includes('/target/'))?.body;
+        })
+        .toEqual({ block: 'demo.csv', column: 'feature_1' });
+    }
+
+    /** Control accesible de keepX. */
+    function keepXControl(page: Page) {
+      return page.getByRole('group', { name: /keepX/i });
+    }
+
+    /** Control numérico de un bloque. */
+    function keepXInputFor(page: Page, block: string) {
+      return keepXControl(page).getByLabel(
+        new RegExp(
+          `keepX.*${block.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`,
+          'i',
+        ),
+      );
+    }
+
+    /** Control numérico del bloque principal. */
+    function keepXInput(page: Page) {
+      return keepXInputFor(page, 'demo.csv');
+    }
+
+    test('aparece al elegir DIABLO y desaparece al volver a PCA', async ({
+      page,
+    }, testInfo) => {
+      await gotoConfigure(page);
+      await waitForDataset(page);
+
+      await page.getByRole('radio', { name: 'DIABLO' }).check();
+      await expect(keepXControl(page)).toBeVisible();
+      await expect(keepXInput(page)).toHaveCount(1);
+      await expect(keepXControl(page).getByRole('spinbutton')).toHaveCount(1);
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      const capturaDiablo = testInfo.outputPath('keepx-diablo.png');
+      await page.screenshot({ path: capturaDiablo, fullPage: true });
+      await testInfo.attach('keepx-diablo', {
+        path: capturaDiablo,
+        contentType: 'image/png',
+      });
+
+      await page.getByRole('radio', { name: 'PCA' }).check();
+      await expect(keepXControl(page)).not.toBeVisible();
+      const capturaPca = testInfo.outputPath('keepx-pca.png');
+      await page.screenshot({ path: capturaPca, fullPage: true });
+      await testInfo.attach('keepx-pca', {
+        path: capturaPca,
+        contentType: 'image/png',
+      });
+    });
+
+    test('un número por bloque viaja repetido en el request', async ({
+      page,
+    }) => {
+      await prepararDiablo(page);
+
+      await keepXInput(page).fill('2');
+      await confirmAlignment(page);
+      await runModel(page);
+
+      const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+      expect(model?.body).toMatchObject({
+        model_type: 'DIABLO',
+        n_components: 2,
+        keepX: { 'demo.csv': [2, 2] },
+      });
+    });
+
+    test('sin completar el control el request conserva el default de mixOmics', async ({
+      page,
+    }) => {
+      await prepararDiablo(page);
+      await confirmAlignment(page);
+      await runModel(page);
+
+      const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+      const body = (model?.body ?? {}) as { keepX?: unknown };
+      expect(body.keepX ?? null).toBeNull();
+      // El análisis sigue su curso normal y llega a Resultados.
+      await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
+    });
+
+    test('cada input queda acotado a las variables del bloque', async ({
+      page,
+    }) => {
+      await prepararDiablo(page);
+
+      const primerInput = keepXInput(page);
+      await expect(primerInput).toHaveAttribute('max', '5');
+      await primerInput.fill('99');
+      await expect(primerInput).toHaveValue('5');
+    });
+
+    test('al cambiar los componentes conserva el valor cargado', async ({
+      page,
+    }) => {
+      await prepararDiablo(page);
+      await keepXInput(page).fill('2');
+
+      await page.getByLabel(es['model.componentsLabel']).fill('3');
+      await expect(keepXInput(page)).toHaveValue('2');
+      await expect(keepXControl(page).getByRole('spinbutton')).toHaveCount(1);
+
+      await page.getByLabel(es['model.componentsLabel']).fill('1');
+      await expect(keepXInput(page)).toHaveValue('2');
+      await expect(keepXControl(page).getByRole('spinbutton')).toHaveCount(1);
+
+      await page.getByLabel(es['model.componentsLabel']).fill('3');
+      await confirmAlignment(page);
+      await runModel(page);
+      const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+      expect(model?.body).toMatchObject({
+        n_components: 3,
+        keepX: { 'demo.csv': [2, 2, 2] },
+      });
+    });
+
+    test('solo se envían los bloques completados y la metadata queda excluida', async ({
+      page,
+    }) => {
+      await gotoPipeline(page);
+      await uploadCsv(page, 'demo.csv');
+      await uploadCsv(page, 'demo2.csv');
+      await uploadCsv(page, 'demo3.csv');
+
+      // La tercera tabla es metadata: no aparece en el control keepX.
+      await page
+        .getByRole('listitem')
+        .filter({ hasText: 'demo3.csv' })
+        .getByRole('button', { name: es['ingest.markAsMetadata'] })
+        .click();
+
+      await page.getByRole('button', { name: es['load.next'] }).click();
+      await waitForDataset(page);
+      await page.getByRole('radio', { name: 'DIABLO' }).check();
+      await page.getByLabel(es['configure.targetColumnLabel']).selectOption('feature_1');
+      await expect
+        .poll(async () => {
+          const calls = await readApiCalls(page);
+          return calls.find((c) => c.path.includes('/target/'))?.body;
+        })
+        .toEqual({ block: 'demo3.csv', column: 'feature_1' });
+
+      await expect(keepXInputFor(page, 'demo.csv')).toHaveCount(1);
+      await expect(keepXInputFor(page, 'demo2.csv')).toHaveCount(1);
+      await expect(keepXInputFor(page, 'demo3.csv')).toHaveCount(0);
+
+      await keepXInputFor(page, 'demo.csv').fill('2');
+      await confirmAlignment(page, ['demo.csv', 'demo2.csv', 'demo3.csv']);
+      await runModel(page);
+
+      const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+      expect(model?.body).toMatchObject({
+        keepX: { 'demo.csv': [2, 2] },
+      });
+      expect(model?.body).not.toHaveProperty('keepX.demo2.csv');
+    });
+
+    test('el valor cero se aplica a todos los componentes', async ({
+      page,
+    }) => {
+      await prepararDiablo(page);
+      await confirmAlignment(page);
+      await keepXInput(page).fill('0');
+      await runModel(page);
+
+      const model = (await readApiCalls(page)).find((c) => c.path === '/v1/model/');
+      expect(model?.body).toMatchObject({
+        keepX: { 'demo.csv': [0, 0] },
+      });
+    });
+  });
+
   test('crea la receta con los bloques del proyecto y calcula la alineación', async ({
     page,
   }) => {
@@ -2946,13 +3255,40 @@ test.describe('Costura con el backend real (contrato compartido)', () => {
   // El mock informa las columnas reales de la tabla de phenotypes: la
   // columna de clase del contrato es una de ellas.
   test.use({
-    block: { columns: ['genotype', 'diet'] },
+    block: { columns: ['genotype', 'diet'], n_variables: 20 },
     jobStages: ['queued'],
   });
 
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
   });
+
+  /**
+   * Completa el control keepX con los valores del request canónico.
+   *
+   * El contrato compartido ejercita una selección explícita de variables
+   * para el DIABLO: el renderer tiene que producir exactamente esa forma.
+   * La UI simple usa un número por bloque, repetido en cada componente.
+   */
+  async function completarKeepXCanonico(page: Page, contrato: Contract) {
+    const canonico = cuerpoCanonico(contrato, 'runModelDiablo');
+    const keepX = canonico.keepX as Record<string, number[]>;
+    const control = page.getByRole('group', { name: /keepX/i });
+
+    for (const [block, valores] of Object.entries(keepX)) {
+      const unicos = new Set(valores);
+      if (unicos.size !== 1) {
+        throw new Error(
+          `El control simple de keepX requiere un valor repetido para ${block}.`,
+        );
+      }
+      await control
+        .getByLabel(
+          new RegExp(`keepX.*${escaparRegex(block)}$`, 'i'),
+        )
+        .fill(String(valores[0]));
+    }
+  }
 
   /**
    * Recorre el pipeline completo con el dataset de ejemplo del escenario:
@@ -2997,6 +3333,11 @@ test.describe('Costura con el backend real (contrato compartido)', () => {
       .getByRole('radiogroup', { name: es['model.typeLabel'] })
       .getByRole('radio', { name: modelo })
       .check();
+
+    // Para DIABLO, la selección explícita de variables es la del contrato.
+    if (modelo === 'DIABLO') {
+      await completarKeepXCanonico(page, leerContrato());
+    }
 
     // Y la variable de clase.
     await page

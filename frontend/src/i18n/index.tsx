@@ -91,6 +91,14 @@ export function useTranslate() {
   );
 }
 
+/**
+ * Firma de `useTranslate()`, para poder pasar `t` como argumento.
+ *
+ * Se deriva de la función real, así que no puede quedar desfasada del
+ * contrato que efectivamente usa la app.
+ */
+export type Translate = ReturnType<typeof useTranslate>;
+
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(
     () => readStoredLang() ?? DEFAULT_LANG,

@@ -340,6 +340,63 @@ diseño. Si divergen, falla y no escribe nada.
 - Con `prefers-reduced-motion: reduce` los paneles quedan visibles y
   estáticos desde el primer frame, y las cuerdas del circos dejan de latir.
 
+## La tarjeta de cada archivo (pantalla de carga)
+
+Cada archivo cargado es **una sola tarjeta** (`FileList.tsx` → `<li>`), con la
+preview y su descripción adentro:
+
+```
+┌───────────────────────────────────────────────────────────────────┐
+│ [icono] breast_TCGA_protein.csv   388.1 KB · 12:02      [ x ]      │
+├───────────────────────────────────────┬───────────────────────────┤
+│  DataPreview (la tabla, con scroll     │  breast_TCGA_protein      │
+│  horizontal propio)                    │  150 muestras × 142 vars  │
+│                                        │  [Marcar como metadata]   │
+└───────────────────────────────────────┴───────────────────────────┘
+```
+
+| Pieza | Dónde |
+|---|---|
+| `src/components/FileList.tsx` | La tarjeta: encabezado + preview (izquierda) + descripción (derecha) |
+| `src/components/DataPreview.tsx` | La tabla de la preview (con su scroll propio) |
+| `src/components/FileDetails.tsx` | La descripción: dimensiones, columna de IDs, rol y advertencias |
+
+- **Horizontal a partir de `md` (768px)**: la columna de la descripción mide
+  `240px` (`260px` desde `xl`); por debajo, cae debajo de la preview.
+- La descripción es una `region` con `aria-label` (`ingest.summaryTitle`) y el
+  botón de rol conserva su `aria-pressed`: no hay cards anidadas ni texto
+  nuevo (todo sale del catálogo de i18n).
+- La página usa `max-w-3xl` (`max-w-5xl` desde `xl`): en pantallas grandes la
+  preview tiene aire.
+
+## El scroll del shell (una sola barra de scroll)
+
+El pipeline (Cargar → Configurar → Resultados) tiene **una sola barra de
+scroll**: la de `<main>`. La página (el documento) nunca scrollea.
+
+```
+html (100%) → body (100%) → #root (100%) → shell (h-full w-full overflow-hidden)
+                                                   ├── <aside>  (sidebar)
+                                                   └── <main>  (relative flex-1 overflow-auto) ← el scroll
+```
+
+Las reglas que lo sostienen:
+
+| Regla | Por qué |
+|---|---|
+| `html`/`body`/`#root` miden `100%` | El shell ocupa exactamente el viewport. `100vw` (que sí incluye el ancho de los scrollbars) haría que el shell mida de más y agregara una barra horizontal. |
+| `<main>` es `relative` | Es el bloque contenedor de los descendientes en `absolute` (los labels `sr-only` de Tailwind son `position: absolute`). Sin `relative`, su bloque contenedor sería el viewport: el `overflow: auto` de `<main>` no los recortaría, el label se escaparía del área scrolleable y **estiraría el documento**. El síntoma era una segunda barra de scroll a la derecha y, al scrollear, un rectángulo vacío con el fondo de la página debajo del shell. |
+| Los labels `sr-only` viven en un wrapper `relative` | Su propio bloque contenedor está dentro de `<main>`, así que el recorte del área scrolleable los aplica aunque el ancestro cambie. |
+
+**Regla para los componentes**: nada posicionado en `absolute` (ni `fixed`)
+dentro de `<main>` puede quedarse sin un ancestro posicionado. Si el bloque
+contenedor cae fuera del área scrolleable, el elemento se escapa de su
+`overflow` y estira la página.
+
+El guardián de esta invariante vive en `tests/e2e/layout.spec.ts`: mide
+`documentElement.scrollHeight` contra `window.innerHeight` en la pantalla de
+Cargar y en la de Configurar (con el DIABLO y su grilla de keepX).
+
 ## Estructura del proyecto
 
 ```
@@ -371,6 +428,7 @@ frontend/
 │   │   ├── BiologyBand.tsx       ← banda decorativa de Inicio (3 paneles)
 │   │   ├── FileDropzone.tsx
 │   │   ├── FileList.tsx
+│   │   ├── FileDetails.tsx       ← descripción del archivo (columna derecha)
 │   │   ├── DataPreview.tsx
 │   │   ├── ModelConfigForm.tsx
 │   │   ├── ResultsPanel.tsx

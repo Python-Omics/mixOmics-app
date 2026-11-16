@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelConfigForm } from '../components/ModelConfigForm';
-import { api, buildErrorMessage, type ApiResponse } from '../lib/api';
+import {
+  api,
+  buildErrorMessage,
+  buildKeepXSelection,
+  type ApiResponse,
+} from '../lib/api';
 import { useProject } from '../lib/project-state';
 import type {
   Alignment,
@@ -194,12 +199,21 @@ export function ConfigurePage({ onBack, onNext }: Props) {
 
     const modelo: BackendModelType =
       state.modelConfig.model_type === 'DIABLO' ? 'DIABLO' : 'PCA';
+    const keepX =
+      modelo === 'DIABLO'
+        ? buildKeepXSelection(
+            state.modelConfig.keepXValues,
+            dataset.blocks,
+            state.modelConfig.n_components,
+          ).keepX
+        : undefined;
     const solicitud: ModelRequest = {
       dataset_id: dataset.id,
       model_type: modelo,
       n_components: state.modelConfig.n_components,
       seed: state.seed,
       ...(target ? { target } : {}),
+      ...(keepX ? { keepX } : {}),
     };
 
     try {
@@ -433,6 +447,7 @@ export function ConfigurePage({ onBack, onNext }: Props) {
         <ModelConfigForm
           onValidChange={setModelValid}
           supervisedAvailable={Boolean(target)}
+          blocks={dataset?.blocks ?? []}
         />
       </section>
 

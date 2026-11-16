@@ -94,7 +94,7 @@
     },
     {
       "name": "runModelDiablo",
-      "descripcion": "Encola un DIABLO (modelo supervisado multibloque).",
+      "descripcion": "Encola un DIABLO (modelo supervisado multibloque) con keepX por bloque: una lista de valores por componente.",
       "method": "POST",
       "path": "/v1/model/",
       "status": 202,
@@ -106,6 +106,10 @@
         "target": {
           "block": "nutrimouse_meta.csv",
           "column": "genotype"
+        },
+        "keepX": {
+          "nutrimouse_gene.csv": [10, 10],
+          "nutrimouse_lipid.csv": [10, 10]
         }
       }
     }

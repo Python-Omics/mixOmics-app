@@ -20,3 +20,13 @@ export type Messages = typeof es;
  * producción.
  */
 export type MessageKey = keyof Messages & string;
+
+/**
+ * Todas las claves del catálogo, en runtime.
+ *
+ * Sirve para validar las claves que llegan del backend (`message_key`):
+ * solo se resuelve una clave que exista de verdad en el catálogo. Vive
+ * acá, y no duplicado en cada componente, para que el conjunto sea el
+ * mismo en todos lados.
+ */
+export const CATALOG_KEYS: ReadonlySet<string> = new Set(Object.keys(es));

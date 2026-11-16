@@ -51,6 +51,15 @@ export type BackendLogEntry = {
 export type ModelType = 'PCA' | 'PLS-DA' | 'sPLS-DA' | 'DIABLO';
 
 /**
+ * Valores de keepX que todavía está editando el usuario.
+ *
+ * Cada bloque tiene un único número: la cantidad de variables que se
+ * seleccionan por componente. Si el bloque no aparece en el registro, su
+ * input está vacío y no se envía al backend.
+ */
+export type KeepXValues = Record<string, number>;
+
+/**
  * Configuración mínima de un modelo para POST /v1/model/.
  * Viaja como JSON al backend; los nombres de los campos siguen la
  * nomenclatura de mixOmics (RNF-U-3).
@@ -61,7 +70,8 @@ export type ModelType = 'PCA' | 'PLS-DA' | 'sPLS-DA' | 'DIABLO';
 export type ModelConfig = {
   model_type: ModelType;
   n_components: number;
-  keepX?: number;
+  /** Borrador del control keepX, indexado por nombre de bloque. */
+  keepXValues: KeepXValues;
   /** nombre del archivo (no path completo) ya cargado en el backend */
   filename: string;
 };

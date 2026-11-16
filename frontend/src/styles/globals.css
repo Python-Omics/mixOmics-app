@@ -126,10 +126,30 @@
     @apply antialiased;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    /*
+     * La altura encadenada (html -> body -> #root) deja que el shell de la
+     * app ocupe EXACTAMENTE el viewport. Con `100vh`/`100vw` (h-screen /
+     * w-screen) el shell mide de más cuando hay scrollbars, y la página
+     * queda con un scroll propio: al scrollear se ve el fondo debajo del
+     * shell como un rectángulo vacío.
+     *
+     * OJO: esto NO alcanza para que la página no scrollee. Un elemento
+     * posicionado en `absolute` (los labels `sr-only` de Tailwind) cuyo
+     * bloque contenedor sea el viewport se escapa del `overflow` del área
+     * scrolleable y estira el documento por más que la cadena de alturas
+     * sea correcta. Para eso, <main> es `relative`: así el recorte del
+     * área scrolleable vuelve a aplicar. Ver `components/ModelConfigForm`.
+     */
+    height: 100%;
   }
 
   body {
-    @apply font-sans bg-pharma-50 text-pharma-700 min-h-screen;
+    @apply font-sans bg-pharma-50 text-pharma-700;
+    height: 100%;
+  }
+
+  #root {
+    height: 100%;
   }
 
   /* Focus visible accesible (WCAG 2.1 AA) */

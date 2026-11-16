@@ -9,10 +9,8 @@ import {
   type ApiResponse,
 } from '../lib/api';
 import { useProject } from '../lib/project-state';
-import type { IngestWarning } from '../lib/types';
-import { useTranslate } from '../i18n';
-import esCatalog from '../i18n/es.json';
-import type { MessageKey } from '../i18n/messages';
+import { useTranslate, type Translate } from '../i18n';
+import { CATALOG_KEYS, type MessageKey } from '../i18n/messages';
 
 type Props = {
   onNext: () => void;
@@ -23,9 +21,6 @@ type Props = {
  * caen dentro de una etiqueta (`<code>`) y devuelve el nodo.
  */
 type Chunks = (chunks: string[]) => ReactNode;
-
-/** Firma de `useTranslate()`, para poder pasar `t` como argumento. */
-type Translate = (key: MessageKey, values?: Record<string, PrimitiveType>) => string;
 
 /**
  * Todas las claves `errors.*` del catálogo.
@@ -88,56 +83,6 @@ type UnmappedCatalogErrorKey = Exclude<
  */
 const CATALOG_IN_SYNC: UnmappedCatalogErrorKey extends never ? true : never =
   true;
-
-/**
- * Todas las claves del catálogo, en runtime.
- *
- * Sirve para validar las claves que llegan del backend (`message_key`):
- * solo se resuelve una clave que exista de verdad en el catálogo.
- */
-const CATALOG_KEYS: ReadonlySet<string> = new Set(Object.keys(esCatalog));
-
-/**
- * Claves de warning de ingesta que la UI conoce.
- *
- * El backend puede agregar códigos nuevos. Para no mostrar una clave cruda,
- * una clave desconocida cae en el mensaje genérico aunque esté en el
- * catálogo.
- */
-const SUPPORTED_INGEST_WARNING_KEYS: ReadonlySet<string> = new Set([
-  'ingest.warnings.nonNumericColumns',
-  'ingest.warnings.encodingRepaired',
-]);
-
-/**
- * Resuelve el `message_key` de un warning contra el catálogo.
- *
- * Devuelve null si la clave no existe o si el renderer todavía no conoce ese
- * tipo de warning; en ambos casos la UI muestra un texto genérico.
- */
-function resolveWarningMessageKey(messageKey: string): MessageKey | null {
-  if (
-    !CATALOG_KEYS.has(messageKey) ||
-    !SUPPORTED_INGEST_WARNING_KEYS.has(messageKey)
-  ) {
-    return null;
-  }
-  return messageKey as MessageKey;
-}
-
-/** Traduce un warning de ingesta sin exponer nunca su clave cruda. */
-function translateWarning(
-  t: Translate,
-  warning: IngestWarning,
-): string {
-  const key = resolveWarningMessageKey(warning.message_key);
-  if (!key) return t('ingest.warningGeneric');
-
-  const text = t(key, {
-    columns: warning.columns?.join(', ') ?? '',
-  });
-  return text === key ? t('ingest.warningGeneric') : text;
-}
 
 /**
  * Extrae el `detail` de FastAPI: un string o la lista de errores de
@@ -367,7 +312,7 @@ export function LoadPage({ onNext }: Props) {
   const canContinue = state.files.length > 0;
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-3xl xl:max-w-5xl space-y-5">
       <header className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-pharma-700">
@@ -403,99 +348,15 @@ export function LoadPage({ onNext }: Props) {
         </p>
       )}
 
-      <FileList files={state.files} onRemove={handleRemove} />
-
-      {state.files.map(
-        (file) =>
-          file.block && (
-            <section
-              key={file.filename}
-              className="card p-4 space-y-3"
-              aria-label={t('ingest.summaryTitle')}
-            >
-              <div>
-                <h3 className="font-semibold text-pharma-700">
-                  {file.block.name}
-                </h3>
-                <p className="text-sm text-slate-600 mt-1">
-                  {t('ingest.dimensions', {
-                    samples: file.block.n_samples,
-                    variables: file.block.n_variables,
-                  })}
-                </p>
-                {/*
-                  Clasificación del bloque:
-                    - el rol lo declara el origen del archivo (`role`): la
-                      tabla de metadata (fenotipo) se anuncia como tal;
-                    - `n_numeric_variables < n_variables` informa cuántas
-                      columnas son numéricas por dtype (el backend además
-                      avisa por su cuenta con un warning).
-                */}
-                {file.role === 'metadata' && (
-                  <p className="text-sm text-slate-600 mt-1">
-                    {t('ingest.metadataBlock')}
-                  </p>
-                )}
-                {file.block.n_numeric_variables < file.block.n_variables && (
-                  <p className="text-sm text-slate-600 mt-1">
-                    {t('ingest.numericVariables', {
-                      count: file.block.n_numeric_variables,
-                    })}
-                  </p>
-                )}
-                <p className="text-xs text-slate-500 mt-1">
-                  {t('ingest.sampleIdColumn', {
-                    column: file.block.sample_id_column,
-                  })}
-                </p>
-              </div>
-
-              {/*
-                Control de rol: el usuario decide si el archivo aporta
-                variables al modelo o si es la tabla de metadata del estudio.
-                El rol NO lo deduce el dtype (ver `FileRole` en
-                `lib/project-state.tsx`): una tabla de metadata puede tener
-                todas sus columnas numéricas.
-
-                `aria-pressed` comunica si el archivo está marcado como tabla
-                de metadata; la etiqueta dice la acción disponible.
-              */}
-              <button
-                type="button"
-                className="btn-secondary"
-                aria-pressed={file.role === 'metadata'}
-                onClick={() =>
-                  setFileRole(
-                    file.filename,
-                    file.role === 'metadata' ? 'block' : 'metadata',
-                  )
-                }
-              >
-                {file.role === 'metadata'
-                  ? t('ingest.markAsBlock')
-                  : t('ingest.markAsMetadata')}
-              </button>
-
-              {file.warnings && file.warnings.length > 0 && (
-                <div className="rounded border border-amber-200 bg-amber-50 p-3">
-                  <h4 className="text-sm font-medium text-amber-900">
-                    {t('ingest.warningsTitle')}
-                  </h4>
-                  <ul className="list-disc pl-5 mt-1 space-y-1">
-                    {file.warnings.map((warning, index) => (
-                      <li
-                        key={`${warning.code}-${index}`}
-                        className="text-sm text-amber-900"
-                      >
-                        {translateWarning(t, warning)}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </section>
-          ),
-      )}
+      {/*
+        Cada archivo es UNA tarjeta: la preview y su descripción (resumen
+        de ingesta y control de rol) van en la misma tarjeta, en horizontal.
+      */}
+      <FileList
+        files={state.files}
+        onRemove={handleRemove}
+        onRoleChange={setFileRole}
+      />
 
       <footer className="flex justify-end pt-2">
         <button

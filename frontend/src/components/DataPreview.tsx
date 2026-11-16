@@ -17,10 +17,14 @@ export function DataPreview({ filename, preview }: Props) {
   const hiddenColumnCount = preview.columns.length - visibleColumns.length;
 
   return (
-    <div className="mt-3 border border-pharma-200 rounded-lg overflow-hidden bg-white">
-      <div className="bg-pharma-50 px-3 py-2 text-xs font-mono text-pharma-700 border-b border-pharma-200 flex justify-between items-center">
-        <span>{filename}</span>
-        <span>
+    <div className="border border-pharma-200 rounded-lg overflow-hidden bg-white">
+      {/*
+        El encabezado se apila solo si la columna es angosta: los dos
+        rótulos no se pisan ni se parten a la mitad.
+      */}
+      <div className="bg-pharma-50 px-3 py-2 text-xs font-mono text-pharma-700 border-b border-pharma-200 flex flex-wrap justify-between items-center gap-x-3 gap-y-1">
+        <span className="whitespace-nowrap">{filename}</span>
+        <span className="whitespace-nowrap">
           {t('preview.dimensions', {
             rows: preview.rows.length,
             cols: preview.columns.length,

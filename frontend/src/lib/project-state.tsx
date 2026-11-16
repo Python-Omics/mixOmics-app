@@ -106,7 +106,7 @@ export type ProjectState = {
 const defaultConfig: ModelConfig = {
   model_type: 'PCA',
   n_components: 2,
-  keepX: 50,
+  keepXValues: {},
   filename: '',
 };
 
