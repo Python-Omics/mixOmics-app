@@ -1,4 +1,4 @@
-import { THEMES, UPCOMING_THEMES, type ThemeId } from '../lib/themes';
+import { THEMES, type ThemeId } from '../lib/themes';
 import { useTranslate } from '../i18n';
 
 type Props = {
@@ -7,10 +7,10 @@ type Props = {
 };
 
 /** Swatch circular con los 5 colores de la paleta, superpuestos. */
-function Palette({ colors, dim }: { colors: readonly string[]; dim?: boolean }) {
+function Palette({ colors }: { colors: readonly string[] }) {
   return (
     <span
-      className={`flex shrink-0 -space-x-1 ${dim ? 'opacity-60' : ''}`}
+      className="flex shrink-0 -space-x-1"
       aria-hidden="true"
     >
       {colors.map((c, i) => (
@@ -74,22 +74,6 @@ export function ThemeSelector({ theme, onChange }: Props) {
           </button>
         );
       })}
-
-      {/* Temas anunciados pero no disponibles todavía */}
-      {UPCOMING_THEMES.map((upcoming) => (
-        <div
-          key={upcoming.name}
-          className="w-full flex items-center gap-3 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 opacity-60"
-        >
-          <Palette colors={upcoming.swatch} dim />
-          <span className="flex-1 text-left text-sm font-medium text-slate-600">
-            {upcoming.name}
-          </span>
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 bg-slate-200 rounded-full px-2 py-0.5">
-            {t('theme.upcoming')}
-          </span>
-        </div>
-      ))}
     </div>
   );
 }

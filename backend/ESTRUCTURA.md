@@ -267,6 +267,7 @@ análisis (RB-7, S16, S24). Todo su contenido es JSON.
 |-------|-----------|
 | `pythomics_version` | Versión instalada de la librería (`importlib.metadata`) |
 | `seed` | Semilla efectiva: la pedida o la generada y registrada (RB-6) |
+| `peak_rss_mb` | **Pico de memoria residente** del proceso que corrió el análisis, en MB (RNF-3: RAM pico durante análisis ≤ 4 GB). Se mide con `resource.getrusage(RUSAGE_SELF)` al final del job (después de las figuras, que son lo que más memoria mueve). En Windows no hay `resource`: el campo queda en `null` |
 | `params` | Parámetros **efectivos** del modelo: `model_type`, `estimator`, `center`, `scale`, `n_components`, `preprocessing`, `blocks` y `target`. En el MVP el preprocesamiento son los valores predeterminados de mixOmics (`center=True`, `scale=False`); el preprocesamiento configurable está diferido. El DIABLO suma `design` y `keepX` |
 | `preprocessing` | Receta de preprocesamiento aplicada: vacía en el MVP |
 | `r_version` y `mixomics_version` | Versión de R y del paquete mixOmics: solo el DIABLO las informa, porque es el único modelo que corre en R |
@@ -277,6 +278,12 @@ análisis (RB-7, S16, S24). Todo su contenido es JSON.
 La huella de los datos es lo que liga un resultado a los archivos **exactos**
 que lo produjeron: si el archivo cambia en disco, la huella cambia y se nota
 que el resultado es de otra corrida.
+
+El pico de RAM es la métrica de **RNF-3**. Ojo con qué mide: es el pico del
+**worker** (Python + R embebida vía rpy2 + matplotlib + seaborn), no el de la
+app completa — al footprint de Electron/Chromium hay que sumarlo aparte.
+Medido sobre `breast.TCGA` (3 bloques, 150 muestras, 526 variables, 2
+componentes, con las cuatro figuras): **557 MB** de pico, en 21 s.
 
 ---
 
@@ -291,6 +298,26 @@ cd backend && .venv/bin/python -m pytest tests/ -q
 Cubren la ingesta (parser y HTTP), las recetas, la alineación, la cola de jobs
 y el worker, las figuras, la provenance, el DIABLO y **la costura con el
 renderer**.
+
+### Cobertura
+
+La cobertura se mide sobre el código de la **app** (`app/`), no sobre el
+núcleo matemético de la librería `pythomics` (que vive en el repositorio
+hermano `../omics` y mide el equipo de la librería):
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/ --cov=app --cov-report=term-missing
+```
+
+- Las dependencias de desarrollo viven en `backend/requirements-dev.txt`
+  (`pytest`, `httpx2`, `pytest-cov`); no se instalan en producción.
+- El **umbral** vive en `backend/pyproject.toml` (`[tool.coverage.report]
+  fail_under`), no hardcodeado en el CI: hoy es **60%** y la cobertura medida
+  es **68%** (`schemas.py` 100%, `ingest.py` 94%, `errors.py` 93%, `api.py`
+  85%, `datasets.py` 82%, `jobs.py` 80%, `capabilities.py` 78%, `paths.py`
+  65%, `worker.py` 33%).
+- `worker.py` queda bajo porque el cálculo corre en un **subproceso** que
+  pytest-cov no ve; con `COVERAGE_PROCESS_START` se puede medir también.
 
 ### El contrato compartido
 

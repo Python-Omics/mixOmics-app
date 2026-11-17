@@ -368,15 +368,15 @@ test.describe('Pythomics frontend — POC', () => {
     expect(bgSterile).not.toBe(bgDefault);
   });
 
-  test('Telehealth Night aparece como Próximamente, no seleccionable', async ({
+  test('Telehealth Night no aparece en el selector de temas', async ({
     page,
   }) => {
     await gotoPipeline(page);
     await page.getByRole('button', { name: es['nav.openSettings'] }).click();
     const dialog = page.getByRole('dialog', { name: es['settings.title'] });
-    await expect(dialog).toContainText('Telehealth Night');
-    await expect(dialog).toContainText(es['theme.upcoming']);
-    // No es un radio seleccionable: los únicos radios son los 5 temas.
+    // Por ahora el tema oscuro no se anuncia: no aparece ni como "Próximamente".
+    await expect(dialog).not.toContainText('Telehealth Night');
+    // Y los únicos radios son los 5 temas disponibles.
     const themeGroup = dialog.getByRole('radiogroup', {
       name: THEME_GROUP_LABEL,
     });
@@ -2623,6 +2623,17 @@ test.describe('Configurar y ejecutar contra el contrato real', () => {
     ).toBeVisible();
     await expect(
       seccionTrazabilidad.getByText('0.1.0a1', { exact: false }),
+    ).toBeVisible();
+
+    // Y el pico de RAM del análisis (RNF-3): la provenance lo trae y la
+    // trazabilidad lo muestra en MB.
+    await expect(
+      page.getByText(es['results.provenancePeakMemory'], { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByText(msg('results.provenancePeakMemoryValue', { mb: 512 }), {
+        exact: true,
+      }),
     ).toBeVisible();
   });
 

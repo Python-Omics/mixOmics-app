@@ -310,6 +310,7 @@ Cada figura lleva un pie de foto con su etiqueta traducida
 | `npm run typecheck` | Valida tipos sin emitir (main y renderer) |
 | `npm run check:i18n` | Guardián: ningún texto hardcodeado, catálogos en paridad, sin claves muertas |
 | `npm run test:e2e` | Suite de Playwright (E2E contra el mock del preload) |
+| `npm run test:coverage` | La misma suite E2E **midiendo la cobertura del renderer** (V8 por el protocolo de DevTools, con un reporter propio). Reporte en `frontend/coverage/index.html` (gitignored). Hoy: **46%** de las líneas del renderer |
 | `npm run smoke` | Build + abre Electron contra el build y verifica la app real (exit 0/1) |
 
 ## Las tres suites

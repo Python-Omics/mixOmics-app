@@ -47,7 +47,6 @@
 
   "theme.groupLabel": "Tema de colores · {count, plural, one {# disponible} other {# disponibles}}",
   "theme.active": "Activo",
-  "theme.upcoming": "Próximamente",
 
   "tutorial.title": "Tutorial",
   "tutorial.closeLabel": "Cerrar tutorial",
@@ -196,6 +195,8 @@
   "results.varianceTitle": "Varianza explicada",
   "results.provenanceTitle": "Trazabilidad",
   "results.provenanceSeed": "Semilla",
+  "results.provenancePeakMemory": "Pico de RAM (análisis)",
+  "results.provenancePeakMemoryValue": "{mb, number} MB",
   "results.provenanceVersions": "Versiones",
   "results.provenanceFiles": "Archivos del análisis",
 

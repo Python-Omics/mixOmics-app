@@ -880,6 +880,30 @@ def _effective_seed(seed: int | None) -> int:
     return secrets.randbelow(2**63)
 
 
+def _pico_rss_mb() -> float | None:
+    """Pico de memoria residente del worker, en MB.
+
+    Es la métrica de RNF-R-3 (RAM pico durante análisis ≤ 4 GB). Se mide
+    sobre el propio worker, que es donde vive el consumo: R embebida vía
+    rpy2, matplotlib y los datos materializados.
+
+    `ru_maxrss` viene en KiB en Linux y en bytes en macOS. En Windows no
+    existe `resource`: la métrica queda sin medir (no es un error).
+    """
+    try:
+        import resource
+    except ImportError:  # pragma: no cover - solo Windows
+        return None
+
+    pico = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        # macOS lo reporta en bytes.
+        return round(pico / (1024 * 1024), 1)
+    # Linux lo reporta en KiB (KiB -> MB en base 1024, que es como se
+    # reporta la memoria en el resto de la app).
+    return round(pico / 1024, 1)
+
+
 def _hash_archivo(path: Path) -> tuple[str, int]:
     """Calcula la huella SHA-256 de un archivo y su tamaño en bytes.
 
@@ -1787,6 +1811,11 @@ def run_job(spec: JobSpec) -> None:
             sample_ids,
             result_path.parent,
         )
+
+    # El pico de memoria se mide AL FINAL del job: las figuras (el CIM y la
+    # red de relevancia) son las que más memoria mueven, y acá ya están
+    # dibujadas.
+    result.provenance.peak_rss_mb = _pico_rss_mb()
 
     write_json_atomic(result_path, result.model_dump(mode="json"))
 

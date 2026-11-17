@@ -367,6 +367,18 @@ export function ResultsPanel({ result, jobId }: Props) {
             <dt className="text-slate-500">{t('results.provenanceSeed')}</dt>
             <dd className="font-mono">{result.provenance.seed}</dd>
           </div>
+          {result.provenance.peak_rss_mb != null && (
+            <div className="flex gap-3">
+              <dt className="text-slate-500">
+                {t('results.provenancePeakMemory')}
+              </dt>
+              <dd className="font-mono">
+                {t('results.provenancePeakMemoryValue', {
+                  mb: result.provenance.peak_rss_mb,
+                })}
+              </dd>
+            </div>
+          )}
           <div className="flex gap-3">
             <dt className="text-slate-500">
               {t('results.provenanceVersions')}

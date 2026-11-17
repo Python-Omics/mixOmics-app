@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
+    "test:coverage": "cross-env PW_COVERAGE=1 playwright test --project=chromium --workers=1",
     "check:i18n": "node scripts/check-i18n.mjs"
   },
   "dependencies": {

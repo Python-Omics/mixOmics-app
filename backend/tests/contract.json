@@ -250,6 +250,7 @@
         { "path": "result.provenance", "kind": "object" },
         { "path": "result.provenance.pythomics_version", "kind": "string" },
         { "path": "result.provenance.seed", "kind": "integer" },
+        { "path": "result.provenance.peak_rss_mb", "kind": "number", "nullable": true },
         { "path": "result.provenance.params", "kind": "object" },
         { "path": "result.provenance.preprocessing", "kind": "array" },
         { "path": "result.provenance.data_files", "kind": "array" },

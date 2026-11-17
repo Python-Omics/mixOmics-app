@@ -18,9 +18,11 @@ python-multipart
 #   pytest  -> tests del backend (backend/tests/)
 #   httpx2  -> TestClient de FastAPI (starlette 1.9 lo exige para probar
 #              las rutas HTTP); es el cliente canonico de las pruebas.
-# Instalar con: backend/.venv/bin/pip install pytest httpx2
-# pytest
-# httpx2
+#   pytest-cov -> mide la cobertura de app/ (el umbral vive en
+#              backend/pyproject.toml).
+#
+# Viven en requirements-dev.txt para que produccion no las arrastre:
+#   backend/.venv/bin/pip install -r backend/requirements-dev.txt
 
 # --- RAG local (LlamaIndex) + LLM local + PDF ---
 llama-index-core>=0.11.0

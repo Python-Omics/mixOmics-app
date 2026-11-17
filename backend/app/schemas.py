@@ -772,6 +772,14 @@ class Provenance(BaseModel):
         ...,
         description="Semilla efectiva del análisis (RB-6): la pedida o la generada.",
     )
+    peak_rss_mb: float | None = Field(
+        default=None,
+        description=(
+            "Pico de memoria residente del proceso que corrió el análisis, "
+            "en MB (RNF-R-3: RAM pico durante análisis ≤ 4 GB). None si la "
+            "plataforma no permite medirlo (Windows)."
+        ),
+    )
     params: dict[str, object] = Field(
         default_factory=dict,
         description="Parámetros efectivos del modelo (valores JSON-serializables).",

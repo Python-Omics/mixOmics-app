@@ -15,9 +15,15 @@
 #
 # Decisiones del operador (no cambiarlas sin avisar):
 #
-#   * La librería `pythomics` vive en un repositorio PRIVADO
-#     (Sephir0ath/omics). El CI la clona con un Personal Access Token guardado
-#     como secret del repositorio: `PYTHOMICS_LIBRARY_TOKEN`.
+#   * La librería `pythomics` vive en el repositorio `Sephir0ath/omics`.
+#     El CI la clona como hermano de este repo (layout obligatorio: los dos
+#     repos tienen que quedar uno al lado del otro).
+#     * Si la librería es PRIVADA (LIBRARY_IS_PRIVATE: 'true', el valor por
+#       defecto): el CI la clona con un Personal Access Token guardado como
+#       secret del repositorio, `PYTHOMICS_LIBRARY_TOKEN`.
+#     * Si la librería pasa a ser PÚBLICA: poné `LIBRARY_IS_PRIVATE: 'false'`
+#       y el secret se puede borrar (el clon usa el token del propio
+#       workflow, que alcanza para leer un repo público).
 #   * La librería se clona de su rama por defecto (sin `ref`): el equipo de la
 #     librería trabaja en paralelo y el CI tiene que avisar cuando una de sus
 #     mudanças rompe la app.
@@ -59,8 +65,18 @@ env:
   PYTHON_VERSION: '3.13'
   # Node 20.10 es el mínimo que pide el frontend (`engines.node`).
   NODE_VERSION: '22'
-  # Repositorio privado de la librería.
+  # Repositorio de la librería `pythomics`.
   LIBRARY_REPOSITORY: Sephir0ath/omics
+  # ¿La librería es PRIVADA?
+  #
+  # 'true'  -> hace falta un PAT (PYTHOMICS_LIBRARY_TOKEN) para clonarla: el
+  #            workflow falla claro si falta el secret.
+  # 'false' -> la librería es PÚBLICA: se clona sin secret, con el token del
+  #            propio workflow, y el PAT se puede borrar.
+  #
+  # El resto del workflow es idéntico en los dos casos: los dos repos se
+  # clonan como hermanos y la librería se instala desde la ruta relativa.
+  LIBRARY_IS_PRIVATE: 'true'
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
@@ -97,6 +113,10 @@ jobs:
       - name: Validar el secret de la librería
         # Este paso corre antes del checkout: el directorio de trabajo no
         # puede ser `backend/` (todavía no existe).
+        #
+        # Solo aplica si la librería es PRIVADA (LIBRARY_IS_PRIVATE): si es
+        # pública se clona sin secret y este paso no debe cortar el job.
+        if: env.LIBRARY_IS_PRIVATE == 'true'
         working-directory: ${{ github.workspace }}
         env:
           TOKEN: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
@@ -107,6 +127,7 @@ jobs:
             echo "::error::Créalo en Settings → Secrets and variables → Actions → New repository secret:"
             echo "::error::un Personal Access Token (classic) con scope 'repo', o un fine-grained token"
             echo "::error::con permiso de lectura de contenidos sobre $LIBRARY_REPOSITORY."
+            echo "::error::Si la librería pasa a ser pública, poné LIBRARY_IS_PRIVATE=false en el workflow."
             exit 1
           fi
 
@@ -115,12 +136,15 @@ jobs:
         with:
           path: mixOmics-app
 
-      - name: Clonar la librería (privada)
+      - name: Clonar la librería
         uses: actions/checkout@v4
         with:
           repository: ${{ env.LIBRARY_REPOSITORY }}
           path: omics
-          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+          # Si hay PAT (librería privada) se usa; si no (librería pública)
+          # se usa el token del propio workflow, que alcanza para leer un
+          # repositorio público.
+          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Instalar Python
@@ -187,9 +211,9 @@ jobs:
           # requirements.txt trae `-e ../../omics[r,viz]`: rpy2 se compila
           # contra el R de arriba.
           "${{ matrix.venv_python }}" -m pip install -r requirements.txt
-          # Dependencias de desarrollo (las declara el propio requirements.txt
-          # en su comentario): pytest y el cliente HTTP de las pruebas.
-          "${{ matrix.venv_python }}" -m pip install pytest httpx2
+          # Dependencias de desarrollo (las declara backend/requirements-dev.txt):
+          # pytest, el cliente HTTP de las pruebas y pytest-cov.
+          "${{ matrix.venv_python }}" -m pip install -r requirements-dev.txt
 
       - name: Instalar las dependencias del backend (sin R)
         if: runner.os != 'Linux'
@@ -200,7 +224,7 @@ jobs:
           # que la ruta relativa `-e ../../omics` se resuelve igual.
           sed 's|omics\[r,viz\]|omics[viz]|' requirements.txt > requirements-ci.txt
           "${{ matrix.venv_python }}" -m pip install -r requirements-ci.txt
-          "${{ matrix.venv_python }}" -m pip install pytest httpx2
+          "${{ matrix.venv_python }}" -m pip install -r requirements-dev.txt
 
       - name: Resumen del entorno
         run: |
@@ -215,7 +239,13 @@ jobs:
       - name: Correr la suite del backend
         # `python -m pytest` (y no `pytest`): es lo que deja el directorio de
         # trabajo en el path, que es como los tests importan `app`.
-        run: '"${{ matrix.venv_python }}" -m pytest tests/ -q'
+        #
+        # La cobertura se mide acá y el umbral vive en backend/pyproject.toml
+        # ([tool.coverage.report] fail_under): si baja de ese piso, el job
+        # falla. El umbral es el mismo en las tres plataformas a proposito:
+        # la parte de DIABLO (que se omite sin R) no cambia lo que mide
+        # pytest-cov del proceso de la API.
+        run: '"${{ matrix.venv_python }}" -m pytest tests/ -q --cov=app --cov-report=term-missing'
 
   # ────────────────────────────────────────────────────────────────────────────
   # Frontend: typecheck + build (guardián de i18n) + E2E de Playwright
@@ -267,6 +297,27 @@ jobs:
       - name: E2E (Playwright)
         run: npx playwright test --project=chromium
 
+      - name: Cobertura del renderer (solo Chromium)
+        # La cobertura se mide con el protocolo de DevTools (V8) desde un
+        # reporter de Playwright: es la misma API que usa `page.coverage`
+        # pero por el otro lado del cable, para no tener que tocar los
+        # specs (que importan `test` de '@playwright/test').
+        #
+        # El reporte queda en frontend/coverage/ (gitignored). El umbral vive
+        # acá porque el reporter solo informa: lo lee el resumen que dejó.
+        if: runner.os == 'Linux'
+        run: |
+          npm run test:coverage
+          node -e "
+            const s = require('./coverage/summary.json');
+            const minimo = 40;
+            console.log('Cobertura del renderer: ' + s.percent + '% (' + s.covered + '/' + s.total + ' lineas)');
+            if (s.percent < minimo) {
+              console.error('Cobertura del renderer por debajo del umbral (' + minimo + '%)');
+              process.exit(1);
+            }
+          "
+
   # ────────────────────────────────────────────────────────────────────────────
   # Smoke: la app Electron real, con un job de verdad contra el backend
   # ────────────────────────────────────────────────────────────────────────────
@@ -281,6 +332,10 @@ jobs:
       - name: Validar el secret de la librería
         # Este paso corre antes del checkout: el directorio de trabajo no
         # puede ser `frontend/` (todavía no existe).
+        #
+        # Solo aplica si la librería es PRIVADA (LIBRARY_IS_PRIVATE): si es
+        # pública se clona sin secret y este paso no debe cortar el job.
+        if: env.LIBRARY_IS_PRIVATE == 'true'
         working-directory: ${{ github.workspace }}
         env:
           TOKEN: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
@@ -291,6 +346,7 @@ jobs:
             echo "::error::Créalo en Settings → Secrets and variables → Actions → New repository secret:"
             echo "::error::un Personal Access Token (classic) con scope 'repo', o un fine-grained token"
             echo "::error::con permiso de lectura de contenidos sobre $LIBRARY_REPOSITORY."
+            echo "::error::Si la librería pasa a ser pública, poné LIBRARY_IS_PRIVATE=false en el workflow."
             exit 1
           fi
 
@@ -299,12 +355,15 @@ jobs:
         with:
           path: mixOmics-app
 
-      - name: Clonar la librería (privada)
+      - name: Clonar la librería
         uses: actions/checkout@v4
         with:
           repository: ${{ env.LIBRARY_REPOSITORY }}
           path: omics
-          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN }}
+          # Si hay PAT (librería privada) se usa; si no (librería pública)
+          # se usa el token del propio workflow, que alcanza para leer un
+          # repositorio público.
+          token: ${{ secrets.PYTHOMICS_LIBRARY_TOKEN || github.token }}
           persist-credentials: false
 
       - name: Instalar Node

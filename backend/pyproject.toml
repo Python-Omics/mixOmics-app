@@ -1,0 +1,41 @@
+# Configuración de pytest y de coverage del backend de Pythomics.
+#
+# El archivo existe sobre todo para lo que ya se usaba en la práctica:
+# `pytest --cov=app --cov-report=term-missing` (ver AGENTS.md §13) necesita
+# un archivo de configuración para poder declarar el UMBRAL de cobertura
+# (`fail_under`) sin hardcodearlo en el YAML del CI.
+#
+# El umbral vive acá y no en `.github/workflows/ci.yml`: el CI solo corre
+# `pytest --cov=app` y se apoya en este archivo.
+
+[tool.pytest.ini_options]
+# La suite vive acá. Se declara para que el rootdir de pytest sea `backend/`
+# (y no el repositorio entero) y para que `pytest` a secas ejecute la suite.
+testpaths = ["tests"]
+
+[tool.coverage.run]
+# Lo que se mide es el código de la APP (backend/), no el núcleo numérico de
+# la librería `pythomics` (que vive en el repositorio hermano `../omics` y
+# mide el equipo de la librería). Ver AGENTS.md §11, fila 4.
+source = ["app"]
+# `parallel` permite que el worker que corre en un SUBPROCESO (app/worker.py,
+# el que hace el PCA/DIABLO de verdad) también aporte sus datos: se mide con
+# `COVERAGE_PROCESS_START` apuntando a este archivo.
+parallel = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+# ── UMBRAL ───────────────────────────────────────────────────────────────────
+# Stopper de regresión. Medido con la suite actual (137 tests) sobre
+# `app/` (1689 sentencias):
+#
+#   * Linux CON R (con DIABLO):        68% (sin medir el subproceso)
+#   * Windows/macOS SIN R (sin DIABLO): 68% (sin medir el subproceso)
+#
+# El umbral es 60 (y no más alto) a propósito: la cobertura del subproceso
+# del worker depende de que el `.pth` de coverage esté instalado, y no
+# queremos que el CI se caiga por un detalle del entorno. 60 es un piso
+# holgado que todavía atrapa una regresión grande; se sube a medida que la
+# suite crezca.
+fail_under = 60

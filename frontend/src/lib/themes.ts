@@ -61,15 +61,9 @@ export const THEME_BY_ID: Record<ThemeId, Theme> = Object.fromEntries(
   THEMES.map((t) => [t.id, t]),
 ) as Record<ThemeId, Theme>;
 
-/**
- * Temas anunciados pero aún no disponibles.
- * Telehealth Night requiere dark mode real (separar los roles de
- * `pharma-700` entre "fondo de sidebar" y "texto principal"), lo que
- * implica refactorizar Sidebar y varios componentes. Ver DECISIONS.md.
+/*
+ * Nota: el tema oscuro "Telehealth Night" NO se anuncia en la UI (por
+ * ahora). Requiere un dark mode real (separar los roles de `pharma-700`
+ * entre "fondo de sidebar" y "texto principal"), lo que implica
+ * refactorizar Sidebar y varios componentes. Ver DECISIONS.md.
  */
-export const UPCOMING_THEMES = [
-  {
-    name: 'Telehealth Night',
-    swatch: ['#0B1020', '#233B7A', '#5B8CFF', '#BFD3FF', '#EAF2FF'] as const,
-  },
-];

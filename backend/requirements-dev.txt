@@ -1,0 +1,21 @@
+# Dependencias de desarrollo del backend de Pythomics.
+#
+# NO se instalan en producción: son para correr la suite y medir la
+# cobertura. Instalación (desde la raíz del repo):
+#
+#   backend/.venv/bin/pip install -r backend/requirements-dev.txt
+#
+# `-r requirements.txt` trae la app y la librería `pythomics` con sus
+# extras (`r` y `viz`).
+-r requirements.txt
+
+# pytest: la suite de backend/tests/.
+pytest>=8
+
+# httpx2: el TestClient de FastAPI (starlette 1.9 lo exige para probar las
+# rutas HTTP); es el cliente canónico de las pruebas.
+httpx2
+
+# pytest-cov: mide la cobertura de `app/` y aplica el umbral declarado en
+# `backend/pyproject.toml` ([tool.coverage.report] fail_under).
+pytest-cov>=7

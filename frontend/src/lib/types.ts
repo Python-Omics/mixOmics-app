@@ -300,6 +300,11 @@ export type Provenance = {
   r_version: string | null;
   mixomics_version: string | null;
   seed: number;
+  /**
+   * Pico de memoria residente del proceso que corrió el análisis, en MB
+   * (RNF-R-3). Null si la plataforma no permite medirlo (Windows).
+   */
+  peak_rss_mb?: number | null;
   /** Parámetros efectivos del modelo (JSON-serializables). */
   params: Record<string, unknown>;
   preprocessing: PreprocessingStep[];

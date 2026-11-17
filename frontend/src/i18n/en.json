@@ -47,7 +47,6 @@
 
   "theme.groupLabel": "Color theme · {count, plural, one {# available} other {# available}}",
   "theme.active": "Active",
-  "theme.upcoming": "Coming soon",
 
   "tutorial.title": "Tutorial",
   "tutorial.closeLabel": "Close tutorial",
@@ -196,6 +195,8 @@
   "results.varianceTitle": "Explained variance",
   "results.provenanceTitle": "Traceability",
   "results.provenanceSeed": "Seed",
+  "results.provenancePeakMemory": "Peak RAM (analysis)",
+  "results.provenancePeakMemoryValue": "{mb, number} MB",
   "results.provenanceVersions": "Versions",
   "results.provenanceFiles": "Analysis files",
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,29 @@ def test_el_worker_registra_las_etapas_en_orden(
         "transform",
         "figures",
     ]
+
+    # RNF-3: la provenance deja constancia del pico de RAM del análisis (el
+    # máximo de la memoria residente del worker, que incluye R embebida).
+    # En Windows no hay forma de medirlo: queda en null, no falla.
+    if sys.platform == "win32":
+        assert resultado.provenance.peak_rss_mb is None
+    else:
+        assert resultado.provenance.peak_rss_mb is not None
+        assert resultado.provenance.peak_rss_mb >= 0
+
+
+def test_el_pico_de_memoria_se_mide_en_megabytes() -> None:
+    """La métrica de RAM es un número en MB (nunca bytes ni KiB)."""
+    from app import worker
+
+    pico = worker._pico_rss_mb()
+
+    if sys.platform == "win32":
+        assert pico is None
+    else:
+        assert pico is not None
+        # Un proceso de Python vivo ya usa bastante más que 1 MB.
+        assert pico > 1
 
 
 def test_el_modelo_recortado_deja_las_variables_mas_importantes() -> None:
