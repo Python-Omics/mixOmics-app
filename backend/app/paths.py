@@ -32,6 +32,11 @@ DATA_SUBDIR = "data"
 #: Nombre del subdirectorio de recetas dentro del directorio de datos.
 DATASETS_SUBDIR = "datasets"
 
+#: Subdirectorios para RAG, conocimiento y reportes (viven en DATA_DIR).
+KNOWLEDGE_SUBDIR = "knowledge"
+RAG_INDEX_SUBDIR = "rag_index"
+REPORTS_SUBDIR = "reports"
+
 
 def _is_frozen() -> bool:
     """True si el proceso corre desde un bundle de PyInstaller."""
@@ -85,3 +90,31 @@ def resolve_datasets_dir() -> Path:
     datasets = resolve_data_dir() / DATASETS_SUBDIR
     datasets.mkdir(parents=True, exist_ok=True)
     return datasets
+
+
+def resolve_knowledge_dir(data_dir: Path | None = None) -> Path:
+    """Directorio de documentos de conocimiento para el RAG.
+
+    En desarrollo puede apuntarse a una carpeta versionada copiando/sincronizando
+    contenido; por defecto vive dentro del directorio de datos para ser escribible.
+    """
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    path = base / KNOWLEDGE_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def resolve_rag_index_dir(data_dir: Path | None = None) -> Path:
+    """Directorio donde se persiste el índice vectorial del RAG."""
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    path = base / RAG_INDEX_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def resolve_reports_dir(data_dir: Path | None = None) -> Path:
+    """Directorio donde se guardan los reportes PDF generados."""
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    path = base / REPORTS_SUBDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
