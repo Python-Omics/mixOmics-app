@@ -1,4 +1,4 @@
-"""Esquemas Pydantic v2 del backend de Pythomics.
+﻿"""Esquemas Pydantic v2 del backend de Pythomics.
 
 Este módulo define el contrato de datos entre la API local (FastAPI) y el
 renderer de la app de escritorio (Electron). Reglas del contrato:
@@ -931,3 +931,105 @@ class JobSpec(BaseModel):
     target: TargetSpec | None = None
     model: JobModelSpec
     paths: JobPathsSpec
+
+# ------------------------------------------------------------------------------
+# RAG: preguntas sobre resultados/interpretación y generación de reportes
+# ------------------------------------------------------------------------------
+
+
+class RagChatRequest(BaseModel):
+    """Pregunta del usuario con contexto RAG (interpretación de resultados)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="Pregunta del usuario (p. ej. cómo interpretar un resultado).",
+    )
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "ID de un job completado para incluir su resultado/provenance como "
+            "contexto. No se envían matrices crudas, solo métricas agregadas."
+        ),
+    )
+    language: Literal["es", "en"] = Field(
+        default="es",
+        description="Idioma preferido de la respuesta.",
+    )
+    top_k: int = Field(
+        default=4,
+        ge=1,
+        le=12,
+        description="Cantidad de fragmentos de conocimiento a recuperar.",
+    )
+
+
+class RagSource(BaseModel):
+    """Fuente recuperada que respalda una respuesta."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    source: str = Field(..., description="Origen del fragmento (archivo/doc/job).")
+    score: float | None = Field(default=None, description="Puntaje de similitud.")
+    excerpt: str = Field(default="", description="Extracto breve del fragmento.")
+
+
+class RagChatResponse(BaseModel):
+    """Respuesta del asistente con trazabilidad de fuentes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    answer: str = Field(..., description="Respuesta generada por el LLM.")
+    sources: list[RagSource] = Field(
+        default_factory=list,
+        description="Fragmentos recuperados usados como contexto.",
+    )
+
+
+class RagIndexRequest(BaseModel):
+    """Solicitud de (re)construcción del índice RAG."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    include_jobs: bool = Field(
+        default=True,
+        description="Si incluye resúmenes de resultados de jobs completados.",
+    )
+
+
+class RagIndexResponse(BaseModel):
+    """Estado de la indexación."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    documents: int = Field(..., description="Cantidad de documentos indexados.")
+    chunks: int = Field(..., description="Cantidad de fragmentos (nodos) generados.")
+    index_dir: str = Field(..., description="Ruta donde se persistió el índice.")
+
+
+class ReportRequest(BaseModel):
+    """Solicitud de generación de reporte PDF para un job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str = Field(..., description="ID del job completado a reportar.")
+    language: Literal["es", "en"] = Field(
+        default="es",
+        description="Idioma preferido del reporte.",
+    )
+    include_llm_narrative: bool = Field(
+        default=True,
+        description="Si incluye narrativa interpretativa generada con RAG+LLM.",
+    )
+
+
+class ReportResponse(BaseModel):
+    """Resultado de la generación del reporte."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    job_id: str = Field(..., description="ID del job reportado.")
+    filename: str = Field(..., description="Nombre del archivo PDF generado.")
+    path: str = Field(..., description="Ruta del PDF en el directorio de reportes.")
