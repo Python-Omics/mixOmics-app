@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import type {
   ApiCallRecord,
   ApiResponse,
+  Figure,
+  FigurePayload,
   JobError,
   ProgressStage,
   PyxAPI,
@@ -2566,7 +2568,7 @@ test.describe('Configurar y ejecutar contra el contrato real', () => {
       .toBeGreaterThan(0);
   });
 
-  test('el resultado muestra las figuras, los biomarcadores y las correlaciones', async ({
+  test('el resultado muestra las figuras, los biomarcadores y la trazabilidad', async ({
     page,
   }) => {
     await gotoPipeline(page);
@@ -2606,32 +2608,11 @@ test.describe('Configurar y ejecutar contra el contrato real', () => {
       page.getByRole('heading', { name: es['results.varianceTitle'] }),
     ).toBeVisible();
 
-    // Los loadings y los scores también: son el resultado numérico del
-    // modelo (RF-4), no solo la tabla de biomarcadores.
-    const seccionLoadings = page.getByRole('region', {
-      name: es['results.loadingsTitle'],
-    });
-    await expect(
-      seccionLoadings.getByRole('cell', { name: 'feature_1' }),
-    ).toBeVisible();
-    const seccionScores = page.getByRole('region', {
-      name: es['results.scoresTitle'],
-    });
-    await expect(seccionScores).toBeVisible();
-    await expect(
-      seccionScores.getByRole('columnheader', { name: 'comp 1' }),
-    ).toBeVisible();
-
-    // Las correlaciones se indexan por par de bloques.
-    const seccionCorrelaciones = page.getByRole('region', {
-      name: es['results.correlationsTitle'],
-    });
-    await expect(
-      page.getByRole('heading', { name: es['results.correlationsTitle'] }),
-    ).toBeVisible();
-    await expect(
-      seccionCorrelaciones.getByText('demo.csv|demo2.csv', { exact: true }),
-    ).toBeVisible();
+    // La pantalla de resultados se limpió: quedan las figuras, los
+    // biomarcadores y la trazabilidad. No hay tablas de scores, loadings ni
+    // correlaciones, ni el volcado crudo del resultado.
+    await expect(page.getByRole('table')).toHaveCount(1);
+    await expect(page.locator('details')).toHaveCount(0);
 
     // Y la trazabilidad del análisis.
     const seccionTrazabilidad = page.getByRole('region', {
@@ -2643,6 +2624,247 @@ test.describe('Configurar y ejecutar contra el contrato real', () => {
     await expect(
       seccionTrazabilidad.getByText('0.1.0a1', { exact: false }),
     ).toBeVisible();
+  });
+
+  /**
+   * Figuras del resultado: las nuevas del DIABLO (heatmap y red de
+   * relevancia), la grilla que las acomoda y la vista ampliada.
+   */
+  test.describe('figuras del resultado', () => {
+    /**
+     * Las cuatro figuras del DIABLO, con las dimensiones reales que manda
+     * el backend (el PNG se mide en la cabecera del archivo).
+     */
+    const FIGURAS_DIABLO: Figure[] = [
+      {
+        kind: 'biomarkers',
+        path: 'biomarkers.png',
+        name: 'biomarkers',
+        mime: 'image/png',
+        width: 1570,
+        height: 697,
+      },
+      {
+        kind: 'heatmap',
+        path: 'heatmap.png',
+        name: 'heatmap',
+        mime: 'image/png',
+        width: 1584,
+        height: 1065,
+      },
+      {
+        kind: 'network',
+        path: 'network.png',
+        name: 'network',
+        mime: 'image/png',
+        width: 1185,
+        height: 818,
+      },
+      {
+        kind: 'circos',
+        path: 'circos.png',
+        name: 'circos',
+        mime: 'image/png',
+        width: 954,
+        height: 1007,
+      },
+    ];
+
+    /**
+     * Pone las figuras del DIABLO en el resultado del job.
+     *
+     * El mock canónico devuelve una sola figura (el sample plot del PCA):
+     * para probar las figuras nuevas y la grilla hace falta un resultado
+     * con las cuatro. Se envuelve la consulta del job (para reemplazar las
+     * figuras) y el canal de figuras (para que cada PNG tenga la
+     * proporción de la figura que representa).
+     */
+    async function mockFiguras(page: Page, figuras: Figure[]) {
+      await page.evaluate((figurasNuevas) => {
+        const porNombre = new Map(
+          figurasNuevas.map((figura) => [figura.name, figura]),
+        );
+        const api = window.pyxAPI.api as unknown as {
+          get: (path: string) => Promise<ApiResponse<unknown>>;
+          getFigure: (
+            jobId: string,
+            name: string,
+          ) => Promise<ApiResponse<FigurePayload>>;
+        };
+        const originalGet = api.get.bind(api);
+
+        api.get = async (path: string) => {
+          const res = await originalGet(path);
+          const data = res.data as
+            | { result?: { figures?: unknown[] } }
+            | undefined;
+          if (res.ok && data?.result) {
+            return {
+              ...res,
+              data: {
+                ...data,
+                result: { ...data.result, figures: figurasNuevas },
+              },
+            };
+          }
+          return res;
+        };
+
+        api.getFigure = async (jobId: string, name: string) => {
+          const figura = porNombre.get(name);
+          const ancho = figura?.width ?? 800;
+          const alto = figura?.height ?? 500;
+          const lienzo = document.createElement('canvas');
+          lienzo.width = ancho;
+          lienzo.height = alto;
+          const contexto = lienzo.getContext('2d');
+          if (contexto) {
+            contexto.fillStyle = '#e2e8f0';
+            contexto.fillRect(0, 0, ancho, alto);
+            contexto.fillStyle = '#0f766e';
+            contexto.font = 'bold 36px sans-serif';
+            contexto.fillText(name, 24, 60);
+          }
+          const dataBase64 =
+            lienzo.toDataURL('image/png').split(',')[1] ?? '';
+          return {
+            ok: true,
+            status: 200,
+            data: { mime: 'image/png', dataBase64 },
+          };
+        };
+      }, figuras);
+    }
+
+    /** Llega a la pantalla de resultados con las figuras del DIABLO. */
+    async function gotoResultsConFiguras(page: Page) {
+      await gotoConfigure(page);
+      await waitForDataset(page);
+      await confirmAlignment(page);
+      await mockFiguras(page, FIGURAS_DIABLO);
+      await runModel(page);
+    }
+
+    test('cada figura del DIABLO tiene su etiqueta y sus dimensiones', async ({
+      page,
+    }) => {
+      await gotoResultsConFiguras(page);
+
+      const seccion = page.getByRole('region', {
+        name: es['results.figuresTitle'],
+      });
+      await expect(seccion).toBeVisible();
+
+      // Las dos figuras nuevas tienen etiqueta propia.
+      await expect(
+        seccion.getByText(es['results.figureKind.heatmap'], { exact: true }),
+      ).toBeVisible();
+      await expect(
+        seccion.getByText(es['results.figureKind.network'], { exact: true }),
+      ).toBeVisible();
+
+      // Y las que ya existían siguen ahí.
+      await expect(
+        seccion.getByText(es['results.figureKind.biomarkers'], { exact: true }),
+      ).toBeVisible();
+      await expect(
+        seccion.getByText(es['results.figureKind.circos'], { exact: true }),
+      ).toBeVisible();
+
+      // El pie de foto lleva las dimensiones del PNG.
+      await expect(seccion.getByText('1584 × 1065 px')).toBeVisible();
+      await expect(seccion.getByText('954 × 1007 px')).toBeVisible();
+    });
+
+    test('una figura se abre en grande y se cierra con Escape', async ({
+      page,
+    }) => {
+      await gotoResultsConFiguras(page);
+
+      const disparador = page.getByRole('button', {
+        name: msg('results.figureExpand', {
+          kind: es['results.figureKind.heatmap'],
+        }),
+      });
+      await disparador.click();
+
+      const dialogo = page.getByRole('dialog', {
+        name: msg('results.figureDialog', {
+          kind: es['results.figureKind.heatmap'],
+        }),
+      });
+      await expect(dialogo).toBeVisible();
+
+      // La imagen ampliada es la misma que la miniatura.
+      await expect(dialogo.getByRole('img')).toHaveAttribute(
+        'src',
+        /^blob:/,
+      );
+
+      await page.keyboard.press('Escape');
+      await expect(dialogo).not.toBeVisible();
+
+      // El foco vuelve al disparador: el teclado no se pierde.
+      await expect(disparador).toBeFocused();
+    });
+
+    test('la vista ampliada se cierra con el botón y con un click fuera', async ({
+      page,
+    }) => {
+      await gotoResultsConFiguras(page);
+
+      const disparador = page.getByRole('button', {
+        name: msg('results.figureExpand', {
+          kind: es['results.figureKind.network'],
+        }),
+      });
+
+      // El botón de cerrar.
+      await disparador.click();
+      const dialogo = page.getByRole('dialog');
+      await expect(dialogo).toBeVisible();
+      await page
+        .getByRole('button', { name: es['results.figureClose'] })
+        .click();
+      await expect(dialogo).not.toBeVisible();
+
+      // Y un click fuera de la imagen.
+      await disparador.click();
+      await expect(dialogo).toBeVisible();
+      await page.mouse.click(8, 8);
+      await expect(dialogo).not.toBeVisible();
+    });
+
+    test('las figuras anchas ocupan la fila completa y las cuadradas no', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1400, height: 900 });
+      await gotoResultsConFiguras(page);
+
+      const cajas = await page
+        .locator('[aria-labelledby="results-figures-title"] figure')
+        .evaluateAll((elementos) =>
+          elementos.map((elemento) => {
+            const rect = elemento.getBoundingClientRect();
+            return {
+              left: Math.round(rect.left),
+              width: Math.round(rect.width),
+            };
+          }),
+        );
+
+      expect(cajas).toHaveLength(FIGURAS_DIABLO.length);
+
+      // El heatmap (apaisado) toma las dos columnas; el círculo
+      // (cuadrado) toma una sola.
+      const heatmap = cajas[1];
+      const circos = cajas[3];
+      expect(heatmap.width).toBeGreaterThan(circos.width * 1.8);
+
+      // Los dos arrancan en el mismo borde: el círculo queda en la primera
+      // columna de su fila, no debajo del heatmap.
+      expect(heatmap.left).toBe(circos.left);
+    });
   });
 
   test('un biomarcador sin estabilidad se muestra sin valor', async ({ page }) => {

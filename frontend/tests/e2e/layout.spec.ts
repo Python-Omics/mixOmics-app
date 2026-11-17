@@ -116,6 +116,40 @@ test('el pipeline no scrollea la pagina: no hay area vacia debajo', async ({
 });
 
 /**
+ * La vista ampliada de una figura es un overlay (`position: fixed`).
+ *
+ * Si se montara dentro del área scrolleable heredaría su `overflow` y
+ * podría estirar el documento: aparecería la segunda barra de scroll y el
+ * rectángulo vacío del que se quejó el operador.
+ */
+test('la vista ampliada de una figura no estira la pagina', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 560 });
+  await page.goto('/');
+
+  await page.getByRole('button', { name: es['home.cta'] }).click();
+  await subirBloques(page, ['demo.csv']);
+  await page.getByRole('button', { name: es['load.next'] }).click();
+  await page.getByRole('button', { name: es['configure.alignmentConfirm'] }).click();
+  await page.getByRole('button', { name: es['configure.run'] }).click();
+  await expect(page.getByText(es['topbar.step.results'])).toBeVisible();
+
+  // La figura aparece en la pantalla de resultados y se abre en grande.
+  const disparador = page.getByRole('button', { name: /Ampliar la figura/ }).first();
+  await expect(disparador).toBeVisible();
+  await disparador.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+
+  const medidas = await medirPagina(page);
+
+  expect(medidas.docScrollHeight).toBe(medidas.innerHeight);
+  expect(medidas.docScrollWidth).toBe(medidas.innerWidth);
+  expect(medidas.scrollMax).toBe(0);
+  expect(medidas.scrollY).toBe(0);
+});
+
+/**
  * El caso reportado: Configurar con varios bloques y el DIABLO.
  *
  * Con el DIABLO aparece la grilla de keepX (una fila por bloque) y con
@@ -123,8 +157,7 @@ test('el pipeline no scrollea la pagina: no hay area vacia debajo', async ({
  * esos labels se escapaba del recorte de <main> y el documento medía
  * 256 px más que la ventana: la página scrolleaba y, al hacerlo, se
  * veía el fondo del documento debajo del shell.
- */
-test('la pantalla de Configurar no estira la pagina con la grilla de keepX', async ({
+ */test('la pantalla de Configurar no estira la pagina con la grilla de keepX', async ({
   page,
 }) => {
   // La ventana del operador: 1904 × 990.

@@ -88,13 +88,16 @@ class Figure(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    kind: str = Field(
+    kind: Literal[
+        "pca", "biomarkers", "circos", "heatmap", "network"
+    ] = Field(
         ...,
         description=(
-            "Tipo de figura: 'pca', 'biomarkers', 'circos', 'cim', etc. "
-            "El renderer decide cómo presentarla a partir de este valor. "
-            "'pca' es el sample plot del PCA; 'biomarkers' es el loading "
-            "plot y 'circos' el círculo de correlaciones del DIABLO."
+            "Tipo de figura. 'pca' es el sample plot del PCA; 'biomarkers' "
+            "es el loading plot y 'circos' el círculo de correlaciones del "
+            "DIABLO; 'heatmap' es el heatmap clusterizado (CIM) y 'network' "
+            "la red de relevancia del DIABLO. El renderer decide cómo "
+            "presentarla a partir de este valor."
         ),
     )
     path: str = Field(

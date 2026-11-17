@@ -101,11 +101,13 @@ export type BlockRole = 'block' | 'metadata';
  * - `pca`: sample plot del PCA (L21).
  * - `biomarkers`: loading plot del DIABLO (L22).
  * - `circos`: círculo de correlaciones del DIABLO (L22).
+ * - `heatmap`: heatmap clusterizado (CIM) del DIABLO.
+ * - `network`: red de relevancia del DIABLO.
  *
  * El esquema del backend admite más clases (menciona `cim`); el contrato
- * del MVP cubre estas tres.
+ * del MVP cubre estas cinco.
  */
-export type FigureKind = 'pca' | 'biomarkers' | 'circos';
+export type FigureKind = 'pca' | 'biomarkers' | 'circos' | 'heatmap' | 'network';
 
 /**
  * Etapa del pipeline de un job (S30).

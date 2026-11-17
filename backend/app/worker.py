@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -81,6 +81,12 @@ NOMBRE_FIGURA_BIOMARKERS = "biomarkers"
 #: Nombre de la figura con el círculo de correlaciones (DIABLO).
 NOMBRE_FIGURA_CIRCOS = "circos"
 
+#: Nombre de la figura con el heatmap de loadings (DIABLO).
+NOMBRE_FIGURA_HEATMAP = "heatmap"
+
+#: Nombre de la figura con la red de relevancia (DIABLO).
+NOMBRE_FIGURA_NETWORK = "network"
+
 #: Paleta de colores de las clases en el círculo de correlaciones.
 COLORES_CLASES = (
     "#1f77b4",
@@ -94,6 +100,49 @@ COLORES_CLASES = (
     "#bcbd22",
     "#17becf",
 )
+
+#: Paleta de colores de los bloques en el heatmap y en la red de
+#: relevancia.
+#:
+#: El heatmap colorea las columnas por **bloque** y la red colorea los
+#: nodos por **bloque** también (son los bloques los que agrupan las
+#: variables). Se usa la misma paleta sobria que la de las clases para que
+#: las figuras de un mismo análisis se vean juntas.
+COLORES_BLOQUES = (
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+)
+
+#: Cantidad de variables por bloque que muestran el heatmap (CIM) y la red
+#: de relevancia.
+#:
+#: La biblioteca dibuja **todas** las variables del modelo: con un modelo
+#: real (breast.TCGA: 200 variables de mRNA, 184 de miRNA y 142 de
+#: proteína) el heatmap tiene más de 500 columnas y la red de relevancia es
+#: un enredo ilegible. Las dos figuras usan solo las variables más
+#: importantes de cada bloque: las que el modelo seleccionó.
+VARIABLES_POR_BLOQUE_FIGURAS = 20
+
+#: Cantidad de muestras a partir de la cual el heatmap omite los
+#: identificadores de muestra: con muchas muestras los nombres se
+#: superponen y no se leen (el color de la fila ya dice la clase).
+UMBRAL_NOMBRES_MUESTRA_HEATMAP = 60
+
+#: Cortes de correlación que se prueban para la red de relevancia, del más
+#: estricto al más laxo.
+#:
+#: Con datos weakly discriminantes ninguna correlación llega a 0.5 y la red
+#: quedaría vacía: se afloja el corte antes de abandonar la figura. El corte
+#: que se usó queda escrito en el título de la figura.
+CORTES_RELEVANCE = (0.5, 0.4, 0.3, 0.2)
 
 #: Tamaño de lectura para el cálculo de la huella de los archivos.
 TAMANO_HASH = 1024 * 1024
@@ -1178,26 +1227,422 @@ def _figura_circos(fitted: _FittedDiablo, ruta: Path) -> Figure:
     )
 
 
+class _ModeloRecortado:
+    """Vista de un modelo DIABLO limitada a sus variables más importantes.
+
+    El heatmap (CIM) y la red de relevancia de la biblioteca se dibujan con
+    **todas** las variables del modelo. Con un modelo real (breast.TCGA: 200
+    variables de mRNA, 184 de miRNA y 142 de proteína) el heatmap tiene más
+    de 500 columnas y la red es un enredo ilegible.
+
+    Esta clase expone la misma superficie que usa la biblioteca
+    (``X_dict_``, ``loadings_``, ``names_``, ``Y_``, ``get_biomarkers`` y
+    ``transform``) pero recortada a las variables con mayor |loading| de
+    cada bloque: las que el modelo seleccionó.
+
+    Los nombres de variable se anteponen con el nombre del bloque cuando
+    dos bloques comparten una variable (un gen y su proteína, por ejemplo):
+    sin eso, la biblioteca renombra las columnas **después** de calcular
+    los colores por bloque y los colores quedan desalineados.
+    """
+
+    def __init__(
+        self,
+        modelo: Any,
+        n_variables: int,
+        n_componentes: int,
+    ) -> None:
+        self._modelo = modelo
+        self.Y_ = modelo.Y_
+        self.X_dict_: dict[str, pd.DataFrame] = {}
+        self.loadings_: dict[str, np.ndarray] = {}
+        self.names_: dict[str, list[str]] = {}
+
+        seleccion: dict[str, tuple[list[str], np.ndarray]] = {}
+        for bloque, matriz in modelo.loadings_.items():
+            matriz = np.asarray(matriz, dtype=float)
+            if matriz.ndim != 2 or matriz.shape[0] == 0:
+                continue
+
+            nombres = [str(nombre) for nombre in modelo.names_.get(bloque, [])]
+            if len(nombres) != matriz.shape[0]:
+                # R y Python no deberían discrepar: si lo hacen, se dibuja
+                # igual, pero con nombres posicionales y queda avisado.
+                logger.warning(
+                    "El bloque '%s' tiene %d loadings y %d nombres: se usan "
+                    "nombres posicionales.",
+                    bloque,
+                    matriz.shape[0],
+                    len(nombres),
+                )
+                nombres = [
+                    f"var_{indice + 1}" for indice in range(matriz.shape[0])
+                ]
+
+            componentes = matriz[:, :n_componentes]
+            # Se conservan las variables con mayor |loading| en algún
+            # componente (las que el modelo seleccionó) y se ordenan por el
+            # loading del primero: es el criterio del círculo de
+            # correlaciones, así que las figuras cuentan la misma historia.
+            importancia = np.max(np.abs(componentes), axis=1)
+            indices = np.argsort(-importancia, kind="stable")[:n_variables]
+            indices = indices[
+                np.argsort(-componentes[indices, 0], kind="stable")
+            ]
+
+            marco = modelo.X_dict_.get(bloque)
+            if marco is not None:
+                # La biblioteca busca las columnas por nombre: si un
+                # nombre no está en el dataframe, se descarta.
+                disponibles = [
+                    indice
+                    for indice in indices
+                    if nombres[indice] in marco.columns
+                ]
+                indices = np.array(disponibles, dtype=int)
+                if indices.size == 0:
+                    continue
+
+            seleccion[bloque] = (
+                [nombres[indice] for indice in indices],
+                matriz[indices, :],
+            )
+
+        # Nombres repetidos entre bloques: se antepone el bloque.
+        conteo: dict[str, int] = {}
+        for nombres, _ in seleccion.values():
+            for nombre in nombres:
+                conteo[nombre] = conteo.get(nombre, 0) + 1
+
+        for bloque, (nombres, matriz) in seleccion.items():
+            renombrados = [
+                f"{bloque}::{nombre}" if conteo[nombre] > 1 else nombre
+                for nombre in nombres
+            ]
+            self.names_[bloque] = renombrados
+            self.loadings_[bloque] = matriz
+
+            marco = modelo.X_dict_.get(bloque)
+            if marco is None:
+                continue
+            self.X_dict_[bloque] = marco[nombres].rename(
+                columns=dict(zip(nombres, renombrados))
+            )
+
+    def get_biomarkers(self, block: str, comp: int = 1) -> pd.DataFrame:
+        """Biomarcadores del bloque, con la forma que espera la biblioteca."""
+        matriz = self.loadings_[block]
+        nombres = np.array(self.names_[block], dtype=object)
+        columna = min(max(int(comp), 1), matriz.shape[1]) - 1
+        valores = matriz[:, columna]
+
+        mascara = valores != 0
+        valores = valores[mascara]
+        nombres = nombres[mascara]
+
+        orden = np.argsort(-np.abs(valores), kind="stable")
+        marcadores = pd.DataFrame(
+            {"value": valores[orden]},
+            index=nombres[orden],
+        )
+        marcadores.index.name = "Variable"
+        return marcadores
+
+    def transform(self, x_dict: dict[str, pd.DataFrame]) -> dict[str, Any]:
+        """Variates del modelo original (la red de relevancia los usa)."""
+        return self._modelo.transform(x_dict)
+
+
+def _modelo_recortado(
+    modelo: Any,
+    n_variables: int,
+    n_componentes: int,
+) -> _ModeloRecortado | None:
+    """Arma la vista recortada del modelo para las figuras del DIABLO.
+
+    ``None`` cuando el modelo no tiene variables que dibujar: no hay
+    figura que hacer y el job sigue sin ella.
+    """
+    loadings = getattr(modelo, "loadings_", None) or {}
+    if not loadings:
+        return None
+
+    recortado = _ModeloRecortado(modelo, n_variables, n_componentes)
+    if not recortado.loadings_:
+        return None
+
+    return recortado
+
+
+def _colores_de_clases(fitted: _FittedDiablo) -> dict[str, str]:
+    """Un color por clase del análisis, para colorear filas o grupos."""
+    return {
+        clase: COLORES_CLASES[indice % len(COLORES_CLASES)]
+        for indice, clase in enumerate(fitted.classes)
+    }
+
+
+def _colores_de_bloques(fitted: _FittedDiablo) -> dict[str, str]:
+    """Un color por bloque, para colorear columnas o nodos."""
+    return {
+        bloque: COLORES_BLOQUES[indice % len(COLORES_BLOQUES)]
+        for indice, bloque in enumerate(fitted.blocks)
+    }
+
+
+def _figura_heatmap(fitted: _FittedDiablo, ruta: Path) -> Figure | None:
+    """Dibuja el heatmap clusterizado (CIM) del DIABLO.
+
+    El CIM es el **Clustered Image Map** de la biblioteca: las muestras en
+    las filas (coloreadas por clase), las variables en las columnas
+    (coloreadas por bloque) y el valor de la variable como color, con los
+    dos dendrogramas de la jerarquía. Es la figura que muestra qué
+    muestras se parecen entre sí y qué variables las separan.
+
+    La biblioteca dibuja **todas** las variables del modelo: con un modelo
+    real eso son cientos de columnas y el mapa no se lee. Por eso la
+    figura se dibuja sobre un modelo recortado a las
+    :data:`VARIABLES_POR_BLOQUE_FIGURAS` variables más importantes de cada
+    bloque.
+
+    Devuelve ``None`` cuando no hay nada que dibujar: el job no se pierde
+    por una figura.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+
+        import matplotlib.pyplot as plt
+
+        from pythomics.visualizations import plot_cim
+    except ImportError as exc:
+        raise PythomicsError(
+            ErrorCode.E_ANALYSIS_FAILED,
+            detail={"reason": "visualizations_not_available"},
+        ) from exc
+
+    modelo = _modelo_recortado(
+        fitted.model,
+        VARIABLES_POR_BLOQUE_FIGURAS,
+        fitted.n_components,
+    )
+    if modelo is None:
+        logger.warning(
+            "El heatmap no se dibuja: el modelo no devolvió loadings por "
+            "bloque."
+        )
+        return None
+
+    componentes = (1, max(1, min(2, fitted.n_components)))
+
+    muestras = 0
+    for bloque in fitted.blocks:
+        marco = modelo.X_dict_.get(bloque)
+        if marco is not None:
+            muestras = max(muestras, len(marco.index))
+
+    grilla = plot_cim(
+        modelo,
+        components=componentes,
+        block_colors=_colores_de_bloques(fitted),
+        group_colors=_colores_de_clases(fitted),
+        # Cada bloque tiene su escala (un z-score por columna): sin esto,
+        # el bloque con más valores dominaría el color de todos.
+        standardize=True,
+        show_var_names=True,
+        # Con muchas muestras los identificadores se superponen: el color
+        # de la fila ya dice de qué clase es cada muestra.
+        show_sample_names=muestras <= UMBRAL_NOMBRES_MUESTRA_HEATMAP,
+        title="CIM - clustered heatmap",
+        figsize=(14, 10),
+        cmap="Spectral_r",
+    )
+
+    try:
+        grilla.figure.savefig(ruta, format="png")
+    finally:
+        plt.close(grilla.figure)
+
+    dimensiones = _dimensiones_png(ruta)
+
+    return Figure(
+        kind="heatmap",
+        path=ruta.name,
+        name=ruta.stem,
+        mime="image/png",
+        width=dimensiones[0] if dimensiones else None,
+        height=dimensiones[1] if dimensiones else None,
+    )
+
+
+def _margen_para_leyendas(eje: Any) -> None:
+    """Abre un margen en el eje para que las leyendas no tapen los nodos.
+
+    La biblioteca de la red de relevancia pone las leyendas en las esquinas
+    del eje y los nodos ocupan toda la caja: sin margen, una leyenda queda
+    encima de un nodo.
+    """
+    x_min, x_max = eje.get_xlim()
+    y_min, y_max = eje.get_ylim()
+    ancho = x_max - x_min
+    alto = y_max - y_min
+
+    eje.set_xlim(x_min - 0.22 * ancho, x_max + 0.08 * ancho)
+    eje.set_ylim(y_min - 0.18 * alto, y_max + 0.08 * alto)
+
+
+def _figura_network(fitted: _FittedDiablo, ruta: Path) -> Figure | None:
+    """Dibuja la red de relevancia entre los bloques del DIABLO.
+
+    La red usa ``plot_network`` de la biblioteca: cruza las variables de
+    bloques distintos según su correlación con los variates, y descarta las
+    variables que no están conectadas con nadie.
+
+    La biblioteca no acepta un corte que venga del usuario: se prueban los
+    cortes de :data:`CORTES_RELEVANCE`, del más estricto al más laxo, y el
+    que se usó queda escrito en el título de la figura. Si ningún par de
+    variables llega al corte más laxo, no hay red que dibujar y la figura se
+    omite (el job no se pierde por eso).
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+
+        import matplotlib.pyplot as plt
+
+        from pythomics.visualizations import plot_network
+    except ImportError as exc:
+        raise PythomicsError(
+            ErrorCode.E_ANALYSIS_FAILED,
+            detail={"reason": "visualizations_not_available"},
+        ) from exc
+
+    colores = _colores_de_bloques(fitted)
+
+    modelo = _modelo_recortado(
+        fitted.model,
+        VARIABLES_POR_BLOQUE_FIGURAS,
+        fitted.n_components,
+    )
+    if modelo is None:
+        logger.warning(
+            "La red de relevancia no se dibuja: el modelo no devolvió "
+            "loadings por bloque."
+        )
+        return None
+
+    for corte in CORTES_RELEVANCE:
+        try:
+            figura, eje = plot_network(
+                modelo,
+                cutoff=corte,
+                components=(1, max(1, min(2, fitted.n_components))),
+                block_colors=colores,
+                title=f"Relevance network (|r| >= {corte})",
+                figsize=(14, 9),
+            )
+        except ValueError as exc:
+            # La biblioteca lanza ValueError cuando ninguna correlación
+            # llega al corte: se afloja y se vuelve a intentar.
+            logger.info(
+                "La red de relevancia no llegó al corte %s: %s",
+                corte,
+                exc,
+            )
+            continue
+
+        # La biblioteca dibuja las leyendas en las esquinas del eje y los
+        # nodos llegan hasta el borde: se abre un margen para que una
+        # leyenda no tape un nodo.
+        _margen_para_leyendas(eje)
+
+        try:
+            figura.savefig(ruta, format="png")
+        finally:
+            plt.close(figura)
+
+        dimensiones = _dimensiones_png(ruta)
+
+        return Figure(
+            kind="network",
+            path=ruta.name,
+            name=ruta.stem,
+            mime="image/png",
+            width=dimensiones[0] if dimensiones else None,
+            height=dimensiones[1] if dimensiones else None,
+        )
+
+    logger.warning(
+        "La red de relevancia no se dibuja: ninguna correlación entre "
+        "variables de bloques distintos llegó al corte %s.",
+        CORTES_RELEVANCE[-1],
+    )
+    return None
+
+
+def _figura_con_respaldo(
+    nombre: str,
+    dibujar: Callable[[_FittedDiablo, Path], Figure | None],
+    fitted: _FittedDiablo,
+    ruta: Path,
+) -> Figure | None:
+    """Dibuja una figura sin tumbar el job si falla.
+
+    El job ya tiene resultados válidos: perder una figura es preferible a
+    perder el análisis. El motivo del fallo queda en el log del worker.
+    """
+    try:
+        return dibujar(fitted, ruta)
+    except Exception as exc:  # noqa: BLE001 - degradar, no tumbar el job
+        logger.warning(
+            "No se pudo dibujar la figura '%s': %s. El job sigue sin ella.",
+            nombre,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+
 def _build_diablo_figures(fitted: _FittedDiablo, directorio: Path) -> list[Figure]:
     """Genera las figuras del DIABLO y las deja en el directorio del job.
 
-    Son dos: el **loading plot** (las variables con mayor |loading| por
-    bloque) y el **círculo de correlaciones** (la relación entre las
+    Son cuatro: el **loading plot** (las variables con mayor |loading| por
+    bloque), el **heatmap clusterizado** (las muestras agrupadas por
+    jerarquía, con las variables más importantes de cada bloque), la **red
+    de relevancia** (qué variables de un bloque se relacionan con las de
+    otro) y el **círculo de correlaciones** (la relación entre las
     variables seleccionadas de cada bloque).
+
+    Ninguna figura puede tumbar el job: si una falla (falta una
+    dependencia, R devuelve un error, se queda sin memoria), se deja
+    aviso en el log y el trabajo sigue con las demás. El heatmap y la red
+    además pueden faltar sin error: cuando el modelo no tiene datos para
+    dibujarlos.
     """
     if not fitted.blocks:
         return []
 
-    return [
-        _figura_biomarkers(
+    dibujadores = (
+        (NOMBRE_FIGURA_BIOMARKERS, _figura_biomarkers),
+        (NOMBRE_FIGURA_HEATMAP, _figura_heatmap),
+        (NOMBRE_FIGURA_NETWORK, _figura_network),
+        (NOMBRE_FIGURA_CIRCOS, _figura_circos),
+    )
+
+    figuras: list[Figure] = []
+    for nombre, dibujar in dibujadores:
+        figura = _figura_con_respaldo(
+            nombre,
+            dibujar,
             fitted,
-            directorio / f"{NOMBRE_FIGURA_BIOMARKERS}.png",
-        ),
-        _figura_circos(
-            fitted,
-            directorio / f"{NOMBRE_FIGURA_CIRCOS}.png",
-        ),
-    ]
+            directorio / f"{nombre}.png",
+        )
+        if figura is not None:
+            figuras.append(figura)
+
+    return figuras
 
 
 def _build_result(

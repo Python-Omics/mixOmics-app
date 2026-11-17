@@ -238,9 +238,15 @@
         },
         { "path": "result.figures", "kind": "array" },
         { "path": "result.figures[].name", "kind": "string", "pattern": "^[^.]+$" },
-        { "path": "result.figures[].kind", "kind": "string" },
+        {
+          "path": "result.figures[].kind",
+          "kind": "enum",
+          "values": ["pca", "biomarkers", "circos", "heatmap", "network"]
+        },
         { "path": "result.figures[].mime", "kind": "string" },
         { "path": "result.figures[].path", "kind": "string" },
+        { "path": "result.figures[].width", "kind": "integer", "nullable": true },
+        { "path": "result.figures[].height", "kind": "integer", "nullable": true },
         { "path": "result.provenance", "kind": "object" },
         { "path": "result.provenance.pythomics_version", "kind": "string" },
         { "path": "result.provenance.seed", "kind": "integer" },

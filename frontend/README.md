@@ -235,6 +235,71 @@ backend (con el token) y la devuelve como `{mime, dataBase64}`; el renderer arma
 un `blob:` URL con esos bytes. La alternativa —meter el base64 dentro del JSON
 del job— multiplicaría el tamaño de la respuesta del job.
 
+## Las figuras de la pantalla de resultados
+
+Las figuras del análisis las dibuja el **worker** (el proceso hijo): el
+renderer solo las muestra. El backend manda, por cada figura, su `kind`, su
+ruta dentro del directorio del job y sus dimensiones en píxeles (leídas de la
+cabecera del PNG).
+
+| `kind` | Qué es | Dónde se dibuja |
+|---|---|---|
+| `pca` | Sample plot del PCA | `pythomics.visualizations.plot_pca` |
+| `biomarkers` | Loading plot del DIABLO (un panel por bloque) | `pythomics.visualizations.plot_biomarkers` |
+| `heatmap` | Heatmap clusterizado del DIABLO (CIM: muestras en las filas, variables en las columnas) | `pythomics.visualizations.plot_cim` |
+| `network` | Red de relevancia del DIABLO (las variables de un bloque que se relacionan con las de otro) | `pythomics.visualizations.plot_network` |
+| `circos` | Círculo de correlaciones del DIABLO | `pythomics.visualizations.plot_circos` |
+
+El **heatmap** es el *Clustered Image Map* (CIM) de la biblioteca: las
+muestras en las filas (coloreadas por clase), las variables en las columnas
+(coloreadas por bloque) y el valor de la variable como color, con los dos
+dendrogramas de la jerarquía. Como la biblioteca dibuja **todas** las
+variables del modelo (en breast.TCGA son 526: 200 de mRNA, 184 de miRNA y 142
+de proteína), el worker le pasa un modelo **recortado** a las 20 variables con
+mayor `|loading|` de cada bloque: un mapa de 500 columnas no se lee y la red
+de relevancia sería un enredo. El recorte no cambia el modelo del análisis:
+solo la vista que se dibuja.
+
+Los identificadores de muestra aparecen en el heatmap solo cuando hay hasta
+60 muestras: con más, los nombres se superponen y el color de la fila ya
+dice de qué clase es cada muestra.
+
+Ninguna figura puede tumbar el trabajo: si una falla (falta una dependencia,
+R devuelve un error, se queda sin memoria), el worker lo deja escrito en su
+log y el job sigue con las demás.
+
+### La grilla: las figuras anchas ocupan la fila completa
+
+La grilla de la sección **Figuras** es de dos columnas, pero una figura
+apaisada no se lee en media columna. El ancho y el alto que manda el backend
+deciden el span (sin medir la imagen en el DOM):
+
+| Proporción (ancho/alto) | Span | Ejemplos |
+|---|---|---|
+| ≥ 1.25 | Fila completa (`lg:col-span-2`) | loading plot (1570×697), heatmap (1584×1065), red de relevancia (1185×818) |
+| < 1.25 | Una columna | círculo de correlaciones (954×1007) |
+
+### La vista ampliada
+
+El problema real de las figuras es de **tamaño**, no de resolución: los PNG
+tienen entre 950 y 1600 px de ancho y se mostraban reducidos. La solución es
+la estándar para figuras científicas: al hacer click en una figura se abre en
+grande.
+
+- La miniatura es un **botón real** con `aria-label` (`results.figureExpand`):
+  se opera con teclado y el lector de pantalla anuncia qué se abre.
+- La vista ampliada es un `role="dialog"` con `aria-modal` y nombre
+  accesible (`results.figureDialog`), montado en un **portal** al `body`: así
+  el overlay cubre toda la ventana y no hereda el `space-y` del panel de
+  resultados (que lo bajaba 16 px) ni el `overflow` de `<main>`.
+- Se cierra con **Escape**, con el botón de cerrar y con un **click fuera**
+  de la imagen, y el foco **vuelve al disparador** al cerrarse.
+- La imagen ampliada es el mismo `blob:` URL que la miniatura: no se vuelve a
+  pedir la figura al backend.
+
+Cada figura lleva un pie de foto con su etiqueta traducida
+(`results.figureKind.*`) y sus dimensiones en píxeles.
+
 ## Scripts disponibles
 
 | Script | Qué hace |

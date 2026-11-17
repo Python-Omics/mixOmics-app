@@ -76,6 +76,18 @@ BLOQUES = [
 TARGET = {"block": "meta.csv", "column": "grupo"}
 
 
+def _colores_distintos(ruta: Path) -> int:
+    """Cuenta los colores distintos de un PNG.
+
+    Sirve para distinguir una figura con contenido de una caja vacía: un
+    PNG monocromo (o casi) es una figura sin datos.
+    """
+    Image = pytest.importorskip("PIL.Image")
+    with Image.open(ruta) as imagen:
+        colores = imagen.convert("RGB").getcolors(maxcolors=1 << 24)
+    return len(colores or [])
+
+
 @pytest.fixture(scope="module")
 def entorno_con_r() -> None:
     """Omite las pruebas si la máquina no tiene R con ``mixOmics``.
@@ -169,14 +181,14 @@ def test_el_diablo_completa_y_devuelve_el_resultado_completo(
     assert all(len(fila) == 2 for fila in matriz)
 
 
-def test_el_loading_plot_y_el_circulo_se_generan_y_se_sirven(
+def test_las_figuras_del_diablo_se_generan_y_se_sirven(
     client: Any,
     write_block: Callable[[str, str], Path],
     crear_dataset: Callable[..., str],
     esperar_job: Callable[..., dict[str, Any]],
     entorno_con_r: None,
 ) -> None:
-    """El DIABLO dibuja el loading plot y el círculo de correlaciones."""
+    """El DIABLO dibuja sus cuatro figuras: loadings, heatmap, red y circos."""
     write_block("gene.csv", CONTENIDO_GENE)
     write_block("lipid.csv", CONTENIDO_LIPID)
     write_block("meta.csv", CONTENIDO_META)
@@ -186,11 +198,20 @@ def test_el_loading_plot_y_el_circulo_se_generan_y_se_sirven(
 
     assert job["status"] == "completed", job
     figuras = {figura["kind"]: figura for figura in job["result"]["figures"]}
-    assert set(figuras) == {"biomarkers", "circos"}, job["result"]["figures"]
+    assert set(figuras) == {
+        "biomarkers",
+        "circos",
+        "heatmap",
+        "network",
+    }, job["result"]["figures"]
 
     for figura in figuras.values():
         assert figura["name"] == figura["path"].removesuffix(".png")
         assert figura["mime"] == "image/png"
+        # El ancho y el alto se leen de la cabecera del PNG: el renderer los
+        # usa para decidir si la figura ocupa la fila completa.
+        assert figura["width"] > 0
+        assert figura["height"] > 0
 
         respuesta = client.get(
             f"/v1/files/{job['job_id']}/{figura['name']}.png"
@@ -198,6 +219,71 @@ def test_el_loading_plot_y_el_circulo_se_generan_y_se_sirven(
         assert respuesta.status_code == 200, respuesta.text
         assert respuesta.headers["content-type"] == "image/png"
         assert respuesta.content.startswith(FIRMA_PNG)
+
+
+def test_el_heatmap_de_loadings_muestra_datos_y_no_una_caja_vacia(
+    client: Any,
+    write_block: Callable[[str, str], Path],
+    crear_dataset: Callable[..., str],
+    esperar_job: Callable[..., dict[str, Any]],
+    data_dir: Path,
+    entorno_con_r: None,
+) -> None:
+    """El heatmap dibuja los loadings de verdad: tiene la escala de color.
+
+    La evidencia no es solo que el archivo exista: un PNG con muchos colores
+    distintos es una figura con contenido (celdas, texto, barra de color), y
+    una caja vacía se comprime a un archivo de un solo color.
+    """
+    write_block("gene.csv", CONTENIDO_GENE)
+    write_block("lipid.csv", CONTENIDO_LIPID)
+    write_block("meta.csv", CONTENIDO_META)
+    dataset_id = crear_dataset(BLOQUES, target=TARGET)
+
+    job = _correr_diablo(client, esperar_job, dataset_id)
+
+    assert job["status"] == "completed", job
+    heatmap = next(
+        figura
+        for figura in job["result"]["figures"]
+        if figura["kind"] == "heatmap"
+    )
+    assert heatmap["name"] == "heatmap"
+
+    png = data_dir / "jobs" / job["job_id"] / "heatmap.png"
+    assert png.is_file()
+    assert png.read_bytes().startswith(FIRMA_PNG)
+    assert _colores_distintos(png) > 20, "El heatmap parece una figura vacía."
+
+
+def test_la_red_de_relevancia_conecta_bloques_distintos(
+    client: Any,
+    write_block: Callable[[str, str], Path],
+    crear_dataset: Callable[..., str],
+    esperar_job: Callable[..., dict[str, Any]],
+    data_dir: Path,
+    entorno_con_r: None,
+) -> None:
+    """La red de relevancia se dibuja y no es una figura vacía."""
+    write_block("gene.csv", CONTENIDO_GENE)
+    write_block("lipid.csv", CONTENIDO_LIPID)
+    write_block("meta.csv", CONTENIDO_META)
+    dataset_id = crear_dataset(BLOQUES, target=TARGET)
+
+    job = _correr_diablo(client, esperar_job, dataset_id)
+
+    assert job["status"] == "completed", job
+    network = next(
+        figura
+        for figura in job["result"]["figures"]
+        if figura["kind"] == "network"
+    )
+    assert network["name"] == "network"
+
+    png = data_dir / "jobs" / job["job_id"] / "network.png"
+    assert png.is_file()
+    assert png.read_bytes().startswith(FIRMA_PNG)
+    assert _colores_distintos(png) > 20, "La red parece una figura vacía."
 
 
 def test_una_receta_sin_variable_de_clase_no_se_puede_ajustar(
@@ -438,6 +524,8 @@ def test_el_diablo_con_un_solo_componente_tambien_termina(
     assert {figura["kind"] for figura in job["result"]["figures"]} == {
         "biomarkers",
         "circos",
+        "heatmap",
+        "network",
     }
 
 
